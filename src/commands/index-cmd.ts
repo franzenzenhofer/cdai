@@ -1,0 +1,28 @@
+import { loadConfig } from '../config.js';
+import { contractTilde } from '../paths.js';
+import { EXIT, fail, note, type ExitCode } from '../protocol.js';
+import { isStale, loadIndex, refreshIndex } from '../store/indexer.js';
+
+const MILLIS_PER_MINUTE = 60_000;
+
+export const runIndex = (args: readonly string[]): ExitCode => {
+  const config = loadConfig();
+  if (config.roots.length === 0) {
+    fail('no roots configured', 'run `cdai setup` once to pick the directories to learn');
+    return EXIT.error;
+  }
+  if (args.includes('--refresh')) {
+    const started = Date.now();
+    const index = refreshIndex(config);
+    note(`cdai: indexed ${index.entries.length} directories in ${Date.now() - started}ms`);
+    return EXIT.noCd;
+  }
+  const index = loadIndex();
+  const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE);
+  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${isStale(index, Date.now()) ? ' (stale)' : ''}`);
+  for (const root of config.roots) {
+    const count = index.entries.filter((entry) => entry.root === root.path).length;
+    note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);
+  }
+  return EXIT.noCd;
+};

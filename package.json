@@ -1,0 +1,51 @@
+{
+  "name": "cdai",
+  "version": "0.1.0",
+  "description": "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
+  "type": "module",
+  "bin": {
+    "cdai": "dist/cdai.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test scripts",
+    "test": "vitest run",
+    "build": "node scripts/build.mjs"
+  },
+  "keywords": [
+    "cd",
+    "cli",
+    "zoxide",
+    "frecency",
+    "fuzzy",
+    "ai",
+    "shell",
+    "navigation"
+  ],
+  "license": "MIT",
+  "author": "Franz Enzenhofer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/franzenzenhofer/cdai.git"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.18.0",
+    "@typescript-eslint/eslint-plugin": "^8.46.0",
+    "@typescript-eslint/parser": "^8.46.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "private": true
+}

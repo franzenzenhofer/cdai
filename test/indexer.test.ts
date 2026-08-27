@@ -1,0 +1,107 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { loadConfig } from '../src/config.js';
+import { buildIndex, childrenOf, emptyIndex, isStale, loadIndex, refreshIndex } from '../src/store/indexer.js';
+import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
+
+let fixture: Fixture;
+
+beforeEach(() => {
+  fixture = makeFixture();
+  process.env['CDAI_CONFIG_DIR'] = fixture.configDir;
+  process.env['CDAI_DATA_DIR'] = fixture.dataDir;
+  writeConfig(fixture);
+});
+
+afterEach(() => {
+  fixture.cleanup();
+  delete process.env['CDAI_CONFIG_DIR'];
+  delete process.env['CDAI_DATA_DIR'];
+});
+
+const names = (): string[] => buildIndex(loadConfig()).entries.map((entry) => entry.name);
+
+describe('buildIndex', () => {
+  it('walks real directories in both roots', () => {
+    const found = names();
+    expect(found).toContain('squash');
+    expect(found).toContain('petalworks');
+    expect(found).toContain('petalworks-2026');
+  });
+
+  it('keeps directories with spaces and unicode', () => {
+    const found = names();
+    expect(found).toContain('space dir with spaces');
+    expect(found).toContain('ünicöde-projekt');
+  });
+
+  it('skips ignored and hidden directories', () => {
+    const found = names();
+    expect(found).not.toContain('node_modules');
+    expect(found).not.toContain('left-pad');
+    expect(found).not.toContain('.hidden-thing');
+  });
+
+  it('records only directories, never files', () => {
+    expect(names()).not.toContain('readme.md');
+  });
+
+  it('ignores a symlink that points at a file', () => {
+    expect(names()).not.toContain('AGENTS.md');
+  });
+
+  it('does not index a symlink target twice', () => {
+    const entries = buildIndex(loadConfig()).entries.filter((e) => e.path.includes('squash'));
+    const realPaths = new Set(entries.map((e) => e.path));
+    expect(realPaths.size).toBe(entries.length);
+    expect(entries.filter((e) => e.name === 'src')).toHaveLength(1);
+  });
+
+  it('survives an unreadable directory', () => {
+    const found = names();
+    expect(found).toContain('locked');
+    expect(found).not.toContain('inside');
+  });
+
+  it('honours the per root depth limit', () => {
+    const names = buildIndex(loadConfig()).entries.map((e) => e.path.split('/').pop());
+    expect(names).toContain('06-workshop');
+    expect(names).not.toContain('slides');
+  });
+});
+
+describe('index persistence', () => {
+  it('round trips through disk', () => {
+    const written = refreshIndex(loadConfig());
+    const read = loadIndex();
+    expect(read.entries).toHaveLength(written.entries.length);
+    expect(read.generatedAt).toBe(written.generatedAt);
+  });
+
+  it('treats a missing index as empty and stale', () => {
+    expect(loadIndex().entries).toEqual([]);
+    expect(isStale(emptyIndex(), Date.now())).toBe(true);
+  });
+
+  it('is fresh right after a refresh', () => {
+    expect(isStale(refreshIndex(loadConfig()), Date.now())).toBe(false);
+  });
+});
+
+describe('childrenOf', () => {
+  it('returns only the direct children present in the index', () => {
+    const index = buildIndex(loadConfig());
+    const children = childrenOf(index, `${fixture.clients}/petalworks`);
+    expect(children.map((c) => c.name).sort()).toEqual([
+      'petalworks-2024',
+      'petalworks-2025',
+      'petalworks-2026',
+    ]);
+  });
+
+  it('carries usable mtimes so latest can sort', () => {
+    const index = buildIndex(loadConfig());
+    const children = childrenOf(index, `${fixture.clients}/petalworks`);
+    const newest = [...children].sort((a, b) => b.mtime - a.mtime)[0];
+    expect(newest?.name).toBe('petalworks-2026');
+  });
+});
