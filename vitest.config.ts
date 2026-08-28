@@ -8,5 +8,11 @@ export default defineConfig({
     testTimeout: TEST_TIMEOUT_MS,
     hookTimeout: TEST_TIMEOUT_MS,
     pool: 'forks',
+    /**
+     * Serial on purpose. These tests spawn real node and zsh processes against real temp
+     * trees, and test/latency.test.ts asserts a wall-clock budget. Parallel workers compete
+     * for the same cores and turn that measurement into noise.
+     */
+    fileParallelism: false,
   },
 });
