@@ -23,8 +23,10 @@ cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/
 → ~/Dropbox/clients/petalworks
 ```
 
-Every one of those is real output from `docs/demo-fixture.sh`, copied from a terminal, not
-written by hand.
+Every one of those is real output, produced by running the binary against the tree that
+`docs/demo-fixture.sh` builds. Reproduce it yourself with
+`sh docs/demo-fixture.sh && vhs docs/demo.tape`. The last one additionally needs that client in
+your history - see below for why, and for what it prints when it is not.
 
 ![cdai demo](docs/demo.gif)
 
@@ -159,7 +161,8 @@ bash: `eval "$(cdai init bash)"` in `~/.bashrc`. fish: `cdai init fish | source`
 
 Set `ai.enabled` to `false` in `~/.config/cdai/config.json` and cdai is a fast fuzzy jumper with
 frecency and operators, nothing else. Tier 1 makes no network call, ever, under any
-configuration. The whole test suite except the tier 2 tests passes with no AI backend installed.
+configuration. All 107 tests pass with no AI backend on `PATH` at all - the tier 2 tests drive
+executable shim scripts, so cloning this repo never spends a token.
 
 When it is on, what leaves your machine is: the words you typed, your cwd, and up to 50
 directory **paths** (no file contents, ever). `ai.command` is just a command line, so any
