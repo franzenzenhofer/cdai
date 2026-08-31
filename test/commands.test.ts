@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseZoxideList } from '../src/commands/import-zoxide.js';
@@ -72,6 +72,17 @@ describe('cli surface', () => {
     const written: unknown = JSON.parse(readFileSync(join(fixture.configDir, 'config.json'), 'utf8'));
     expect(JSON.stringify(written)).toContain(join(fixture.rootDir, 'dev'));
     expect(loadConfigFrom(fixture).ai.command).toBe('auto');
+    expect(run.stderr).toContain('candidate directory paths may be sent');
+  });
+
+  it('offers explicit AI opt-in and opt-out during setup', () => {
+    const disabled = runCli('setup', '--yes', '--no-ai');
+    expect(disabled.status).toBe(0);
+    expect(loadConfigFrom(fixture).ai.enabled).toBe(false);
+    expect(disabled.stderr).toContain('AI fallback disabled');
+    expect(runCli('setup', '--ai', '--no-ai').status).toBe(1);
+    expect(runCli('setup', '--ai').status).toBe(0);
+    expect(loadConfigFrom(fixture).ai.enabled).toBe(true);
   });
 
   it('reports the machine state in doctor', () => {
@@ -94,6 +105,36 @@ describe('cli surface', () => {
     const petal = runCli('complete', '--', 'pet');
     expect(petal).toEqual({ status: 0, stdout: 'petalworks\n', stderr: '' });
     expect(runCli('complete', '--', 'space').stdout).toBe('space dir with spaces\n');
+    expect(runCli('complete', '--', '-P', 'pet').stdout).toBe('petalworks\n');
+  });
+
+  it('expands duplicate completion names to unambiguous paths', () => {
+    mkdirSync(join(fixture.projects, 'shared'));
+    mkdirSync(join(fixture.clients, 'shared'));
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const paths = runCli('complete', '--', 'sha').stdout.trim().split('\n');
+    expect(new Set(paths)).toEqual(
+      new Set([join(fixture.projects, 'shared'), join(fixture.clients, 'shared')]),
+    );
+  });
+
+  it('keeps completion cached, rejects stale history, and invalidates changed config', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    writeFileSync(
+      join(fixture.dataDir, 'db.json'),
+      JSON.stringify({ records: [{ path: join(fixture.clients, 'ghost'), visits: 100, lastVisit: NOW }] }),
+    );
+    expect(runCli('complete', '--', 'ghost').stdout).toBe('');
+    const config: Record<string, unknown> = JSON.parse(
+      readFileSync(join(fixture.configDir, 'config.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    writeFileSync(
+      join(fixture.configDir, 'config.json'),
+      JSON.stringify({ ...config, ignore: ['node_modules', '.git', 'dist', 'changed'] }),
+    );
+    expect(runCli('complete', '--', 'pet').stdout).toBe('');
   });
 
   it('emits Bash and fish completion hooks', () => {
@@ -109,7 +150,7 @@ describe('cli surface', () => {
     expect(runCli('--help').status).toBe(0);
     const version = runCli('--version');
     expect(version.status).toBe(0);
-    expect(version.stderr.trim()).toBe('0.2.1');
+    expect(version.stderr.trim()).toBe('0.3.0');
   });
 
   it('honours the config dir override', () => {
@@ -151,6 +192,58 @@ describe('cli surface', () => {
     expect(run.status).toBe(1);
     expect(run.stdout).toBe('');
     expect(run.stderr).toContain('no longer exists');
+  });
+
+  it('refreshes once when a confident cached hit moved', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const oldPath = join(fixture.clients, 'petalworks');
+    const movedPath = join(fixture.projects, 'petalworks');
+    renameSync(oldPath, movedPath);
+    const run = runCli('query', '--', 'petalworks');
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe(movedPath);
+    expect(run.stderr).not.toContain('no longer exists');
+  });
+
+  it('reuses a confirmed AI intent without spawning the backend twice', () => {
+    const target = join(fixture.clients, 'petalworks');
+    const counter = join(fixture.rootDir, 'ai-calls');
+    const shim = join(fixture.rootDir, 'ai-shim');
+    writeFileSync(
+      shim,
+      `#!/bin/sh\nprintf 'called\\n' >> '${counter}'\nprintf '%s' '{"path":"${target}","reason":"flowers"}'\n`,
+    );
+    chmodSync(shim, 0o755);
+    writeConfig(fixture, { enabled: true, command: shim, args: [], model: '' });
+    writeFileSync(
+      join(fixture.dataDir, 'db.json'),
+      JSON.stringify({ records: [{ path: target, visits: 10, lastVisit: NOW }] }),
+    );
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const args = ['query', '--', 'that', 'client', 'with', 'flowers'];
+    expect(runCli(...args).stdout.trim()).toBe(target);
+    const recalled = runCli(...args);
+    expect(recalled.stdout.trim()).toBe(target);
+    expect(recalled.stderr).not.toContain('thinking');
+    expect(readFileSync(counter, 'utf8').trim().split('\n')).toEqual(['called']);
+  });
+
+  it('invalidates a confirmed intent when its target is missing', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    writeFileSync(
+      join(fixture.dataDir, 'aliases.json'),
+      JSON.stringify({
+        version: 1,
+        aliases: [{ query: 'that missing client', path: join(fixture.clients, 'ghost'), updatedAt: NOW }],
+      }),
+    );
+    expect(runCli('query', '--', 'that', 'missing', 'client').status).toBe(1);
+    const aliases = JSON.parse(readFileSync(join(fixture.dataDir, 'aliases.json'), 'utf8')) as {
+      aliases: unknown[];
+    };
+    expect(aliases.aliases).toEqual([]);
   });
 });
 

@@ -22,6 +22,10 @@ $ cdai that client with the flowers
 cdai: thinking... (apfel)
 cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/n]
 → ~/Dropbox/clients/petalworks
+
+# the confirmed wording is now a local, model-free hit
+$ cdai that client with the flowers
+→ ~/Dropbox/clients/petalworks
 ```
 
 The deterministic cases are reproducible against the tree from `docs/demo-fixture.sh`; record
@@ -76,7 +80,10 @@ cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/
 The model is a re-ranker over a set you could have printed yourself, not a path generator. It
 is doing the one thing it is good at - "flowers" means "petalworks" - and is structurally
 prevented from doing the thing it is bad at. A missing backend, a timeout, or a chatty model
-degrades to fuzzy suggestions, never to a wrong `cd`.
+degrades to fuzzy suggestions, never to a wrong `cd`. A confirmed natural-language answer is
+stored as a bounded local alias, validated against the current roots and filesystem, and reused
+without another model call. Deterministic matching still wins if the tree later gains a better
+direct match.
 
 Corollary, stated plainly: cdai does **not** do semantic search over your whole disk. If the
 directory is neither a fuzzy candidate nor recently used, no amount of LLM will find it.
@@ -112,7 +119,7 @@ Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
                     ▼
         ┌───────────────────────┐        ┌──────────────────┐
         │ tier 1: deterministic │◀───────│ index.json  dirs │  rebuilt on miss, TTL 60min
-        │ fuzzy + frecency      │◀───────│ db.json frecency │  fed by the shell hook
+        │ fuzzy + frecency      │◀───────│ db + aliases     │  visits + confirmed intent
         └───────────┬───────────┘        └──────────────────┘
                     │
       score >= 550  │  2+ candidates       nothing convincing
@@ -157,10 +164,13 @@ exec zsh
 bash: `eval "$(cdai init bash)"` in `~/.bashrc`. fish: `cdai init fish | source` in
 `~/.config/fish/config.fish`. Coming from zoxide? `cdai import zoxide` seeds your frecency.
 
-The shell integration keeps native `cd` behavior first, including options such as `-L` and
-`-P`, `cd -`, and zsh's `cd old new` substitution. If native `cd` cannot handle the arguments,
-cdai treats them as intent. Tab completion combines normal filesystem directories with cached
-indexed names; it never invokes AI, opens a picker, or crawls the filesystem.
+The shell integration keeps native `cd` behavior first, including `cd -`, CDPATH, and zsh's
+`cd old new` substitution. In zsh and Bash, options such as `-L` and `-P` compose with indexed
+intent (`cdai -P petal`). Failed explicit paths containing `/` or starting with `~`, stack
+syntax, and invalid options stay native-only instead of being guessed. Ordinary words fall back
+to cdai intent. Tab completion combines filesystem directories with cached indexed names,
+strips recognized flags, expands duplicate names to full paths, and never invokes AI, opens a
+picker, or crawls the filesystem.
 Documented controls such as `cdai doctor`, `cdai index --refresh`, and `cdai --version` always
 go directly to the executable. After upgrading, restart the shell (for example, `exec zsh`) to
 load the latest wrapper and completion definitions.
@@ -206,13 +216,15 @@ appended when `{prompt}` is absent:
 cdai understands bare model JSON and the response envelopes emitted by Apfel, Claude, Gemini,
 and OpenAI-compatible tools. Backend output is capped at 1 MiB, calls time out, control text is
 removed from displayed reasons, and every failure falls back to deterministic suggestions.
+Setup states which backend was selected and that vague queries plus candidate paths may be sent
+to it. Use `cdai setup --no-ai` during or after setup to opt out, and `--ai` to re-enable it.
 
 ### Turning AI off entirely
 
-Set `ai.enabled` to `false` in `~/.config/cdai/config.json` and cdai is a fast fuzzy jumper with
-frecency and operators, nothing else. Tier 1 makes no network call, ever, under any
-configuration. All 134 tests pass with no AI backend on `PATH` at all - the tier 2 tests drive
-executable shim scripts, so cloning this repo never spends a token.
+Run `cdai setup --no-ai` (or set `ai.enabled` to `false`) and cdai is a fast fuzzy jumper with
+frecency, operators, and any previously confirmed local aliases. Tier 1, Tab, and alias lookup
+make no network call under any configuration. The full suite passes with no AI backend on
+`PATH`; tier 2 tests drive executable shim scripts, so cloning this repo never spends a token.
 
 The chosen backend receives the words you typed, your cwd, and up to 50 in-root directory
 **paths** - never file contents. With Apfel or Ollama that stays local; cloud-backed CLIs apply
@@ -233,16 +245,20 @@ their own privacy and billing policies.
 }
 ```
 
-Data lives in `~/.local/share/cdai/`: `index.json`, `db.json` (frecency), `visits.log` (append
-only, ingested and truncated on the next run, so the shell hook spawns no subprocess).
+Data lives in `~/.local/share/cdai/`: `index.json`, `db.json` (frecency), `aliases.json`
+(confirmed intent, capped at 256), and `visits.log` (append only, ingested on the next run, so
+the shell hook spawns no subprocess). The index carries a roots/depth/ignore fingerprint and is
+rebuilt automatically when that configuration changes.
 
 ## Commands
 
 ```
-cdai <words>              jump to the directory you mean
+cdai [cd-options] <words> native cd first, then indexed/remembered/AI intent
+cdai <explicit/path>      native cd only; never fuzzy or AI-rerouted
 cdai query -- <words>     resolve only, prints the path on stdout
 cdai init <zsh|bash|fish> print the shell integration, meant for eval
-cdai setup [--yes]        detect project roots and write the config
+cdai setup [--yes] [--ai|--no-ai]
+                          detect roots and choose optional AI fallback
 cdai index [--refresh]    show or rebuild the directory index
 cdai import zoxide        seed frecency from an existing zoxide database
 cdai doctor               show what cdai sees on this machine
@@ -255,14 +271,15 @@ stderr.
 ## Limitations
 
 - **No Windows.** zsh, bash and fish on macOS and Linux.
-- **The index is a snapshot**, rebuilt on a miss or after 60 minutes. A folder created two
-  minutes ago may need `cdai index --refresh`.
+- **The index is a snapshot**, rebuilt when configuration changes, an old uncertain query needs
+  it, or a confident cached target vanished. A brand-new folder during the 60-minute TTL may
+  still need `cdai index --refresh`.
 - **Crawl depth is bounded** by your config (and capped at 64). Deep monorepos need a deeper
   root, and a deeper root means a bigger index.
 - **Tier 2 is seconds, not milliseconds**, and needs a working CLI backend. It is off the hot
   path by design, not by accident.
 - **No semantic search over unindexed directories.** See the section above.
-- **~2500 lines of source TypeScript.** This is a small tool that does one thing, not a platform.
+- **Small TypeScript codebase.** This is one focused tool, not a platform.
 
 ## Development
 
@@ -270,11 +287,10 @@ stderr.
 npm run typecheck && npm run lint && npm run test && npm run build
 ```
 
-134 tests, no mocking library, no fake filesystem. Fixtures are real temp trees containing
-spaces, unicode, symlinks, an unreadable directory and a `node_modules`. The AI tier is tested
-against real executable shim scripts. The shell integration is tested by running `zsh -f` and
-checking which directory it actually ended up in. Zero runtime dependencies; the build is a
-single 56KB `dist/cdai.js` from esbuild.
+No mocking library and no fake filesystem. Fixtures are real temp trees containing spaces,
+unicode, symlinks, an unreadable directory and a `node_modules`. The AI tier uses executable
+shim processes; zsh and Bash run end to end; fish runs in CI on Linux. Exact-hit latency remains
+a hard build gate. Zero runtime dependencies; the build is one bundled `dist/cdai.js`.
 
 ## Prior art
 

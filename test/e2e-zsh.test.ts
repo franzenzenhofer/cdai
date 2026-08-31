@@ -135,6 +135,25 @@ describe('cdai in a real zsh', () => {
     expect(run.stderr).toBe('');
   });
 
+  it('applies native flags after resolving indexed intent', () => {
+    const physical = runZsh(withInit('cdai -P petal; pwd'));
+    expect(physical.status).toBe(0);
+    expect(physical.stdout.trim()).toBe(realpathSync(`${fixture.clients}/petalworks`));
+    const logical = runZsh(withInit('cdai -L petal; pwd'));
+    expect(logical.status).toBe(0);
+    expect(logical.stdout.trim().endsWith('/clients/petalworks')).toBe(true);
+  });
+
+  it('keeps explicit missing paths and invalid flags native-only', () => {
+    const path = runZsh(withInit('cdai ./definitely-missing; print "exit=$?"'));
+    expect(path.stdout.trim()).toBe(`exit=${EXIT_ERROR}`);
+    expect(path.stderr).toContain('definitely-missing');
+    expect(path.stderr).not.toContain('no match');
+    const flag = runZsh(withInit('cdai -Z petal; print "exit=$?"'));
+    expect(flag.stdout.trim()).toBe(`exit=${EXIT_ERROR}`);
+    expect(flag.stderr).not.toContain('thinking');
+  });
+
   it('preserves zsh native old-new directory substitution', () => {
     const start = `${fixture.projects}/tabletop-web`;
     const run = runZsh(withInit(`cd ${start}; cdai web 3d; pwd`));
@@ -155,7 +174,7 @@ describe('cdai in a real zsh', () => {
     expect(run.stdout).toContain('version=0');
     expect(run.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
     expect(run.stderr).toContain('cdai doctor');
-    expect(run.stderr).toContain('0.2.1');
+    expect(run.stderr).toContain('0.3.0');
     expect(run.stderr).not.toContain('thinking');
   });
 

@@ -4,7 +4,7 @@ import { tryReadJson } from '../json.js';
 import { indexFile, writeAtomic } from '../paths.js';
 import type { Config, RootConfig } from '../config.js';
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 export const INDEX_TTL_MS = 60 * 60 * 1000;
 export const MAX_ENTRIES = 50_000;
 export const MAX_WALK_MS = 5000;
@@ -20,6 +20,7 @@ export interface IndexEntry {
 export interface DirIndex {
   readonly version: number;
   readonly generatedAt: number;
+  readonly configKey: string;
   readonly entries: readonly IndexEntry[];
 }
 
@@ -35,7 +36,15 @@ const readEntry = (value: unknown): IndexEntry | undefined => {
   return { path, name, mtime, root };
 };
 
-export const emptyIndex = (): DirIndex => ({ version: INDEX_VERSION, generatedAt: 0, entries: [] });
+export const indexConfigKey = (config: Config): string =>
+  JSON.stringify({ roots: config.roots, ignore: config.ignore });
+
+export const emptyIndex = (): DirIndex => ({
+  version: INDEX_VERSION,
+  generatedAt: 0,
+  configKey: '',
+  entries: [],
+});
 
 export const loadIndex = (): DirIndex => {
   const file = indexFile();
@@ -43,12 +52,14 @@ export const loadIndex = (): DirIndex => {
   const parsed = tryReadJson(file);
   if (!isRecord(parsed) || !Array.isArray(parsed['entries'])) return emptyIndex();
   const generatedAt = parsed['generatedAt'];
+  const configKey = parsed['configKey'];
   return {
     version: INDEX_VERSION,
     generatedAt:
       typeof generatedAt === 'number' && Number.isFinite(generatedAt) && generatedAt >= 0
         ? generatedAt
         : 0,
+    configKey: typeof configKey === 'string' ? configKey : '',
     entries: parsed['entries'].map(readEntry).filter((e): e is IndexEntry => e !== undefined),
   };
 };
@@ -59,6 +70,9 @@ export const saveIndex = (index: DirIndex): void => {
 
 export const isStale = (index: DirIndex, now: number): boolean =>
   index.generatedAt > now || now - index.generatedAt > INDEX_TTL_MS;
+
+export const matchesConfig = (index: DirIndex, config: Config): boolean =>
+  index.configKey === indexConfigKey(config);
 
 const shouldSkip = (name: string, ignore: readonly string[]): boolean =>
   name.startsWith(HIDDEN_PREFIX) || ignore.includes(name);
@@ -137,7 +151,12 @@ export const buildIndex = (config: Config, now: number = Date.now()): DirIndex =
     if (real !== undefined) state.seen.add(real);
     walk(root.path, 1, root, state);
   }
-  return { version: INDEX_VERSION, generatedAt: now, entries: state.entries };
+  return {
+    version: INDEX_VERSION,
+    generatedAt: now,
+    configKey: indexConfigKey(config),
+    entries: state.entries,
+  };
 };
 
 export const refreshIndex = (config: Config, now: number = Date.now()): DirIndex => {

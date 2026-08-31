@@ -1,5 +1,5 @@
 import { dataDir } from '../paths.js';
-import { CLI_CONTROL_PATTERN } from './control.js';
+import { BASH_CD_FLAG_CHARS, CLI_CONTROL_PATTERN } from './control.js';
 import { shellQuote } from './quote.js';
 
 const recorder = (): string => `if [ -n "\${EPOCHSECONDS+x}" ]; then
@@ -22,18 +22,40 @@ const runner = (): string => `__cdai_run() {
   command \${CDAI_BIN:-cdai} "$@"
 }`;
 
+const parser = (): string => `__cdai_parse() {
+  _CDAI_CD_FLAGS=()
+  _CDAI_QUERY=()
+  local arg parsing=1
+  for arg in "$@"; do
+    if [ "$parsing" -eq 1 ] && [ "$arg" = "--" ]; then
+      parsing=0
+    elif [ "$parsing" -eq 1 ] && [[ "$arg" =~ ^-[${BASH_CD_FLAG_CHARS}]+$ ]]; then
+      _CDAI_CD_FLAGS+=("$arg")
+    elif [ "$parsing" -eq 1 ] && [[ "$arg" == [-+]* ]]; then
+      return 1
+    else
+      parsing=0
+      _CDAI_QUERY+=("$arg")
+    fi
+  done
+}`;
+
 const jumper = (): string => `cdai() {
   case "\${1-}" in
     ${CLI_CONTROL_PATTERN}) __cdai_run "$@"; return $? ;;
   esac
-  if [ "$#" -gt 0 ] && [ "\${1#-}" != "$1" ]; then
+  builtin cd "$@" 2>/dev/null && return
+  if ! __cdai_parse "$@"; then
     builtin cd "$@"
     return
   fi
-  builtin cd -- "$@" 2>/dev/null && return
+  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ] || [[ "\${_CDAI_QUERY[0]}" == */* || "\${_CDAI_QUERY[0]}" == '~'* ]]; then
+    builtin cd "$@"
+    return
+  fi
   local result
-  result="$(__cdai_run query -- "$@")" || return $?
-  [ -n "$result" ] && builtin cd -- "$result"
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  [ -n "$result" ] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 
 const completer = (): string => `__cdai_complete() {
@@ -41,15 +63,17 @@ const completer = (): string => `__cdai_complete() {
   local candidate
   COMPREPLY=()
   if [ "\${current#-}" != "$current" ]; then
-    COMPREPLY=( $(compgen -W '-L -P -e --' -- "$current") )
+    COMPREPLY=( $(compgen -W '-L -P -e -@ --' -- "$current") )
     return
   fi
   while IFS= read -r candidate; do
     [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
   done < <(compgen -d -- "$current")
-  while IFS= read -r candidate; do
-    [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
-  done < <(__cdai_run complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
+  if __cdai_parse "\${COMP_WORDS[@]:1}"; then
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+    done < <(__cdai_run complete -- "\${_CDAI_QUERY[@]}" 2>/dev/null)
+  fi
 }
 complete -o filenames -F __cdai_complete cdai`;
 
@@ -62,6 +86,8 @@ _CDAI_DATA="$CDAI_DATA_DIR"
 ${recorder()}
 
 ${runner()}
+
+${parser()}
 
 ${jumper()}
 

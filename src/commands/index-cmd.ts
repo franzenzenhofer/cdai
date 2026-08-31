@@ -1,7 +1,7 @@
 import { loadConfig } from '../config.js';
 import { contractTilde } from '../paths.js';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
-import { isStale, loadIndex, refreshIndex } from '../store/indexer.js';
+import { isStale, loadIndex, matchesConfig, refreshIndex } from '../store/indexer.js';
 
 const MILLIS_PER_MINUTE = 60_000;
 
@@ -19,7 +19,8 @@ export const runIndex = (args: readonly string[]): ExitCode => {
   }
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE);
-  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${isStale(index, Date.now()) ? ' (stale)' : ''}`);
+  const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
+  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${stale ? ' (stale)' : ''}`);
   for (const root of config.roots) {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);

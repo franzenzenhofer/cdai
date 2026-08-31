@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/commands/doctor.ts
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync6 } from "node:fs";
 
 // src/ai/backend.ts
 import { basename } from "node:path";
@@ -132,6 +132,7 @@ var dataDir = () => {
 var configFile = () => join2(configDir(), "config.json");
 var dbFile = () => join2(dataDir(), "db.json");
 var indexFile = () => join2(dataDir(), "index.json");
+var aliasesFile = () => join2(dataDir(), "aliases.json");
 var visitsLog = () => join2(dataDir(), "visits.log");
 var expandTilde = (input) => {
   if (input === "~") return homedir();
@@ -450,33 +451,90 @@ var ingest = () => {
   return merged;
 };
 
+// src/store/aliases.ts
+import { existsSync as existsSync4 } from "node:fs";
+import { isAbsolute as isAbsolute4 } from "node:path";
+var ALIAS_VERSION = 1;
+var MAX_ALIASES = 256;
+var MAX_QUERY_LENGTH = 512;
+var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/g, " ");
+var readAlias = (value) => {
+  if (!isRecord3(value)) return void 0;
+  const { query, path, updatedAt } = value;
+  if (typeof query !== "string" || query === "" || query.length > MAX_QUERY_LENGTH) return void 0;
+  if (typeof path !== "string" || !isAbsolute4(path)) return void 0;
+  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) return void 0;
+  return { query, path, updatedAt };
+};
+var emptyAliases = () => ({ version: ALIAS_VERSION, aliases: [] });
+var loadAliases = () => {
+  const file = aliasesFile();
+  if (!existsSync4(file)) return emptyAliases();
+  const parsed = tryReadJson(file);
+  if (!isRecord3(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"])) {
+    return emptyAliases();
+  }
+  const aliases = parsed["aliases"].slice(0, MAX_ALIASES).map(readAlias).filter((a) => a !== void 0);
+  return { version: ALIAS_VERSION, aliases };
+};
+var saveAliases = (aliases) => {
+  writeAtomic(aliasesFile(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
+`);
+};
+var findAlias = (query) => {
+  const normalized = normalizeIntent(query);
+  if (normalized === "") return void 0;
+  return loadAliases().aliases.find((alias) => alias.query === normalized);
+};
+var rememberAlias = (query, path, updatedAt) => {
+  const normalized = normalizeIntent(query);
+  if (normalized === "" || normalized.length > MAX_QUERY_LENGTH || !isAbsolute4(path)) return;
+  const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
+  saveAliases([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
+};
+var forgetAlias = (query) => {
+  const normalized = normalizeIntent(query);
+  const db = loadAliases();
+  const kept = db.aliases.filter((alias) => alias.query !== normalized);
+  if (kept.length !== db.aliases.length) saveAliases(kept);
+};
+
 // src/store/indexer.ts
-import { existsSync as existsSync4, readdirSync as readdirSync2, realpathSync, statSync as statSync2 } from "node:fs";
-import { basename as basename2, isAbsolute as isAbsolute4, join as join4 } from "node:path";
-var INDEX_VERSION = 1;
+import { existsSync as existsSync5, readdirSync as readdirSync2, realpathSync, statSync as statSync2 } from "node:fs";
+import { basename as basename2, isAbsolute as isAbsolute5, join as join4 } from "node:path";
+var INDEX_VERSION = 2;
 var INDEX_TTL_MS = 60 * 60 * 1e3;
 var MAX_ENTRIES = 5e4;
 var MAX_WALK_MS = 5e3;
 var HIDDEN_PREFIX = ".";
-var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readEntry = (value) => {
-  if (!isRecord3(value)) return void 0;
+  if (!isRecord4(value)) return void 0;
   const { path, name, mtime, root } = value;
-  if (typeof path !== "string" || !isAbsolute4(path) || typeof name !== "string" || name === "") return void 0;
-  if (typeof root !== "string" || !isAbsolute4(root)) return void 0;
+  if (typeof path !== "string" || !isAbsolute5(path) || typeof name !== "string" || name === "") return void 0;
+  if (typeof root !== "string" || !isAbsolute5(root)) return void 0;
   if (typeof mtime !== "number" || !Number.isFinite(mtime) || mtime < 0) return void 0;
   return { path, name, mtime, root };
 };
-var emptyIndex = () => ({ version: INDEX_VERSION, generatedAt: 0, entries: [] });
+var indexConfigKey = (config) => JSON.stringify({ roots: config.roots, ignore: config.ignore });
+var emptyIndex = () => ({
+  version: INDEX_VERSION,
+  generatedAt: 0,
+  configKey: "",
+  entries: []
+});
 var loadIndex = () => {
   const file = indexFile();
-  if (!existsSync4(file)) return emptyIndex();
+  if (!existsSync5(file)) return emptyIndex();
   const parsed = tryReadJson(file);
-  if (!isRecord3(parsed) || !Array.isArray(parsed["entries"])) return emptyIndex();
+  if (!isRecord4(parsed) || !Array.isArray(parsed["entries"])) return emptyIndex();
   const generatedAt = parsed["generatedAt"];
+  const configKey = parsed["configKey"];
   return {
     version: INDEX_VERSION,
     generatedAt: typeof generatedAt === "number" && Number.isFinite(generatedAt) && generatedAt >= 0 ? generatedAt : 0,
+    configKey: typeof configKey === "string" ? configKey : "",
     entries: parsed["entries"].map(readEntry).filter((e) => e !== void 0)
   };
 };
@@ -485,6 +543,7 @@ var saveIndex = (index) => {
 `);
 };
 var isStale = (index, now) => index.generatedAt > now || now - index.generatedAt > INDEX_TTL_MS;
+var matchesConfig = (index, config) => index.configKey === indexConfigKey(config);
 var shouldSkip = (name, ignore) => name.startsWith(HIDDEN_PREFIX) || ignore.includes(name);
 var canonical = (dir) => {
   try {
@@ -536,12 +595,17 @@ var buildIndex = (config, now = Date.now()) => {
     ignore: config.ignore
   };
   for (const root of config.roots) {
-    if (!existsSync4(root.path)) continue;
+    if (!existsSync5(root.path)) continue;
     const real = canonical(root.path);
     if (real !== void 0) state.seen.add(real);
     walk(root.path, 1, root, state);
   }
-  return { version: INDEX_VERSION, generatedAt: now, entries: state.entries };
+  return {
+    version: INDEX_VERSION,
+    generatedAt: now,
+    configKey: indexConfigKey(config),
+    entries: state.entries
+  };
 };
 var refreshIndex = (config, now = Date.now()) => {
   const index = buildIndex(config, now);
@@ -567,11 +631,10 @@ var reportAi = (ai) => {
   note(`ai     enabled via ${backend2 === null ? ai.command : backendLabel(backend2)}`);
   note(`  ${mark(backend2 !== null)} ${backend2?.command ?? "supported backend"} available`);
 };
-var reportRoots = () => {
-  const config = loadConfig();
+var reportRoots = (config) => {
   note(`roots  ${config.roots.length}`);
   for (const root of config.roots) {
-    note(`  ${mark(existsSync5(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
+    note(`  ${mark(existsSync6(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
   }
   reportAi(config.ai);
 };
@@ -584,16 +647,22 @@ var runDoctor = () => {
     note("run `cdai setup` to get started");
     return EXIT.error;
   }
-  reportRoots();
+  const config = loadConfig();
+  reportRoots(config);
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE);
-  note(`index  ${mark(existsSync5(indexFile()))} ${index.entries.length} dirs, ${ageMinutes}min old${isStale(index, Date.now()) ? " (stale)" : ""}`);
-  note(`db     ${mark(existsSync5(dbFile()))} ${loadDb().records.length} remembered paths`);
-  note(`visits ${mark(existsSync5(visitsLog()))} ${visitsLog()}`);
+  const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
+  note(`index  ${mark(existsSync6(indexFile()))} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? " (stale)" : ""}`);
+  note(`db     ${mark(existsSync6(dbFile()))} ${loadDb().records.length} remembered paths`);
+  note(`alias  ${mark(existsSync6(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
+  note(`visits ${mark(existsSync6(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable("fzf") !== null)}`);
   note(`tty    ${mark(hasTty())}`);
   return EXIT.ok;
 };
+
+// src/commands/complete.ts
+import { existsSync as existsSync7, statSync as statSync3 } from "node:fs";
 
 // src/match/resolve.ts
 import { basename as basename3, dirname as dirname2 } from "node:path";
@@ -872,29 +941,73 @@ var tokenize = (input) => {
 };
 var tokenizeArgs = (args) => tokenize(args.join(" "));
 
+// src/shell/control.ts
+var CLI_CONTROLS = [
+  "init",
+  "setup",
+  "index",
+  "import",
+  "doctor",
+  "query",
+  "complete",
+  "--help",
+  "-h",
+  "--version",
+  "-v"
+];
+var CLI_CONTROL_PATTERN = CLI_CONTROLS.join("|");
+var CLI_CONTROL_WORDS = CLI_CONTROLS.join(" ");
+var ZSH_CD_FLAG_CHARS = "qLsP";
+var BASH_CD_FLAG_CHARS = "LPe@";
+var CD_FLAG = new RegExp(`^-[${ZSH_CD_FLAG_CHARS}${BASH_CD_FLAG_CHARS}]+$`);
+var stripCdOptions = (args) => {
+  let cursor = 0;
+  while (cursor < args.length) {
+    const arg = args[cursor];
+    if (arg === "--") return args.slice(cursor + 1);
+    if (arg === void 0 || !CD_FLAG.test(arg)) break;
+    cursor += 1;
+  }
+  return args.slice(cursor);
+};
+
 // src/commands/complete.ts
 var COMPLETION_LIMIT = 20;
 var MILLIS_PER_SECOND = 1e3;
 var RECORD_SEPARATOR = /[\t\r\n]/;
+var isDirectory = (path) => {
+  try {
+    return existsSync7(path) && statSync3(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
 var safeCandidates = (args, input) => {
-  const query = tokenizeArgs(args);
+  const query = tokenizeArgs(stripCdOptions(args));
   if (query.tokens.length === 0) return [];
   const context = {
     cwd: input.cwd,
     frecencyByPath: frecencyMap(input.db, input.nowSeconds)
   };
   return collapseChains(rankCandidates(query, buildCandidates(input), context)).filter(
-    ({ candidate, score }) => score >= THRESHOLD.candidate && !RECORD_SEPARATOR.test(candidate.name)
+    ({ candidate, score }) => score >= THRESHOLD.candidate && !RECORD_SEPARATOR.test(candidate.name) && (candidate.root !== "" || isDirectory(candidate.path))
   );
 };
 var completeQuery = (args, input) => {
   const ranked = safeCandidates(args, input);
-  const names = ranked.map(({ candidate }) => candidate.name);
-  return [...new Set(names)].slice(0, COMPLETION_LIMIT);
+  const counts = /* @__PURE__ */ new Map();
+  ranked.forEach(({ candidate }) => counts.set(candidate.name, (counts.get(candidate.name) ?? 0) + 1));
+  const values = ranked.map(
+    ({ candidate }) => counts.get(candidate.name) === 1 ? candidate.name : candidate.path
+  );
+  return [...new Set(values)].slice(0, COMPLETION_LIMIT);
 };
 var runComplete = (args) => {
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
-  const input = { index: loadIndex(), db: loadDb(), cwd: process.cwd(), nowSeconds };
+  const config = loadConfig();
+  const index = loadIndex();
+  if (!matchesConfig(index, config)) return EXIT.ok;
+  const input = { index, db: loadDb(), cwd: process.cwd(), nowSeconds };
   const matches = completeQuery(args, input);
   if (matches.length > 0) process.stdout.write(`${matches.join("\n")}
 `);
@@ -903,7 +1016,7 @@ var runComplete = (args) => {
 
 // src/commands/import-zoxide.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync8 } from "node:fs";
 var ZOXIDE = "zoxide";
 var ZOXIDE_ARGS = ["query", "--list", "--score"];
 var MILLIS_PER_SECOND2 = 1e3;
@@ -935,7 +1048,7 @@ var runImportZoxide = () => {
     return EXIT.error;
   }
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
-  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync6(r.path));
+  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync8(r.path));
   const db = loadDb();
   const byPath = new Map(db.records.map((record) => [record.path, record]));
   for (const record of imported) {
@@ -963,7 +1076,8 @@ var runIndex = (args) => {
   }
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE2);
-  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${isStale(index, Date.now()) ? " (stale)" : ""}`);
+  const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
+  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${stale ? " (stale)" : ""}`);
   for (const root of config.roots) {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);
@@ -972,11 +1086,11 @@ var runIndex = (args) => {
 };
 
 // src/commands/query.ts
-import { existsSync as existsSync7, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync9, statSync as statSync5 } from "node:fs";
 
 // src/ai/client.ts
 import { spawn } from "node:child_process";
-import { statSync as statSync3 } from "node:fs";
+import { statSync as statSync4 } from "node:fs";
 import { resolve as resolve3 } from "node:path";
 var MAX_OUTPUT_BYTES = 1024 * 1024;
 var MAX_JSON_CANDIDATES = 32;
@@ -993,7 +1107,7 @@ var ENVELOPE_KEYS = [
   "choices",
   "candidates"
 ];
-var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var parseJson = (text) => {
   try {
     return JSON.parse(text);
@@ -1028,7 +1142,7 @@ var jsonValues = (text) => {
   return values;
 };
 var directAnswer = (value) => {
-  if (!isRecord4(value) || !Object.hasOwn(value, "path")) return null;
+  if (!isRecord5(value) || !Object.hasOwn(value, "path")) return null;
   const path = value["path"];
   if (path !== null && typeof path !== "string") return null;
   const reason = value["reason"];
@@ -1039,7 +1153,7 @@ var directAnswer = (value) => {
 };
 var childrenOf2 = (value) => {
   if (Array.isArray(value)) return value;
-  if (!isRecord4(value)) return [];
+  if (!isRecord5(value)) return [];
   return ENVELOPE_KEYS.flatMap((key) => Object.hasOwn(value, key) ? [value[key]] : []);
 };
 var parseAiAnswer = (raw) => {
@@ -1089,9 +1203,9 @@ var runCommand = (backend2, prompt, timeoutMs) => new Promise((resolveOutput, re
   child.on("error", finish2);
   child.on("close", (code) => finish2(code === 0 ? null : new Error(`${backend2.kind} exited with ${String(code)}`)));
 });
-var isDirectory = (path) => {
+var isDirectory2 = (path) => {
   try {
-    return statSync3(path).isDirectory();
+    return statSync4(path).isDirectory();
   } catch {
     return false;
   }
@@ -1103,7 +1217,7 @@ var matchAiPath = (path, candidates) => {
   } catch {
     return null;
   }
-  return candidates.find((candidate) => resolve3(candidate) === requested && isDirectory(candidate)) ?? null;
+  return candidates.find((candidate) => resolve3(candidate) === requested && isDirectory2(candidate)) ?? null;
 };
 var sanitizeReason = (reason) => {
   const visible = [...reason].map((char) => {
@@ -1157,9 +1271,9 @@ var buildAiRequest = (input) => {
 
 // src/commands/query.ts
 var MILLIS_PER_SECOND3 = 1e3;
-var isDirectory2 = (path) => {
+var isDirectory3 = (path) => {
   try {
-    return existsSync7(path) && statSync4(path).isDirectory();
+    return existsSync9(path) && statSync5(path).isDirectory();
   } catch {
     return false;
   }
@@ -1175,13 +1289,30 @@ var suggest = (ranked, raw) => {
   guesses.forEach((g) => note(`        ${contractTilde(g.candidate.path)}`));
   return EXIT.error;
 };
+var jumpKnown = (path) => {
+  jump(path);
+  return EXIT.ok;
+};
 var jumpExisting = (path) => {
-  if (!isDirectory2(path)) {
+  if (!isDirectory3(path)) {
     fail("matched directory no longer exists", "run `cdai index --refresh`");
     return EXIT.error;
   }
-  jump(path);
-  return EXIT.ok;
+  return jumpKnown(path);
+};
+var recalledAlias = (context) => {
+  const alias = findAlias(context.query.raw);
+  if (alias === void 0) return null;
+  const trusted = context.config.roots.some((root) => isUnder(alias.path, root.path));
+  if (trusted && isDirectory3(alias.path)) return jumpKnown(alias.path);
+  forgetAlias(context.query.raw);
+  return null;
+};
+var acceptAi = (outcome, context) => {
+  const label = outcome.reason === "" ? "" : ` (${outcome.reason})`;
+  if (!confirm(`cdai: ${contractTilde(outcome.path)}${label}`)) return EXIT.noCd;
+  rememberAlias(context.query.raw, outcome.path, context.nowSeconds);
+  return jumpKnown(outcome.path);
 };
 var aiTier = async (strict, context) => {
   const { ai } = context.config;
@@ -1198,8 +1329,8 @@ var aiTier = async (strict, context) => {
   if (request.candidates.length === 0) return suggest(ranked, context.query.raw);
   const backend2 = resolveAiBackend(ai);
   if (backend2 === null) {
-    const label2 = ai.command === "auto" ? "no supported AI backend found" : `${ai.command} unavailable`;
-    note(`cdai: ${label2}, staying deterministic`);
+    const label = ai.command === "auto" ? "no supported AI backend found" : `${ai.command} unavailable`;
+    note(`cdai: ${label}, staying deterministic`);
     return suggest(ranked, context.query.raw);
   }
   note(`cdai: thinking... (${backendLabel(backend2)})`);
@@ -1208,56 +1339,73 @@ var aiTier = async (strict, context) => {
     note(`cdai: ai had no usable answer (${outcome.why})`);
     return suggest(ranked, context.query.raw);
   }
-  const label = outcome.reason === "" ? "" : ` (${outcome.reason})`;
-  if (!confirm(`cdai: ${contractTilde(outcome.path)}${label}`)) return EXIT.noCd;
-  jump(outcome.path);
-  return EXIT.ok;
+  return acceptAi(outcome, context);
 };
-var finish = async (decision, context) => {
-  if (decision.kind === "hit") return jumpExisting(decision.path);
+var retryFresh = async (context) => {
+  const input = { ...context.input, index: refreshIndex(context.config) };
+  const decision = resolveQuery(context.query, input);
+  return finish(decision, { ...context, input }, true);
+};
+var finish = async (decision, context, refreshed) => {
+  if (decision.kind === "hit") {
+    if (isDirectory3(decision.path)) return jumpKnown(decision.path);
+    return refreshed ? jumpExisting(decision.path) : retryFresh(context);
+  }
   if (decision.kind === "choose") {
     const chosen = pick(toItems(decision.candidates.map((c) => c.candidate.path)));
     if (chosen === null) return EXIT.noCd;
-    return jumpExisting(chosen);
+    if (isDirectory3(chosen)) return jumpKnown(chosen);
+    return refreshed ? jumpExisting(chosen) : retryFresh(context);
   }
   return aiTier(decision.candidates, context);
 };
 var freshIndex = (config) => {
   const index = loadIndex();
-  return index.entries.length === 0 ? refreshIndex(config) : index;
+  if (index.entries.length > 0 && matchesConfig(index, config)) return { index, refreshed: false };
+  return { index: refreshIndex(config), refreshed: true };
 };
-var runQuery = async (args) => {
-  const first = args[0];
-  if (args.length === 1 && first !== void 0 && isDirectory2(absolutize(first))) {
-    jump(absolutize(first));
-    return EXIT.ok;
-  }
+var searchInput = (args) => {
   const query = tokenizeArgs(args);
   if (query.tokens.length === 0) {
     fail("nothing to search for", "usage: cdai <words describing the directory>");
-    return EXIT.error;
+    return null;
   }
   const config = loadConfig();
-  if (config.roots.length === 0) {
-    fail("no roots configured", "run `cdai setup` once to pick the directories to learn");
-    return EXIT.error;
+  if (config.roots.length > 0) return { query, config };
+  fail("no roots configured", "run `cdai setup` once to pick the directories to learn");
+  return null;
+};
+var runQuery = async (args) => {
+  const first = args[0];
+  if (args.length === 1 && first !== void 0 && isDirectory3(absolutize(first))) {
+    return jumpKnown(absolutize(first));
   }
+  const search = searchInput(args);
+  if (search === null) return EXIT.error;
+  const { query, config } = search;
   const db = ingest();
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND3);
-  let input = { index: freshIndex(config), db, cwd: process.cwd(), nowSeconds };
+  const initial = freshIndex(config);
+  let refreshed = initial.refreshed;
+  let input = { index: initial.index, db, cwd: process.cwd(), nowSeconds };
   let decision = resolveQuery(query, input);
-  if (decision.kind === "unsure" && isStale(input.index, Date.now())) {
+  if (decision.kind === "unsure") {
+    const recalled = recalledAlias({ query, config, db, nowSeconds, input });
+    if (recalled !== null) return recalled;
+  }
+  if (!refreshed && decision.kind === "unsure" && isStale(input.index, Date.now())) {
     input = { ...input, index: refreshIndex(config) };
+    refreshed = true;
     decision = resolveQuery(query, input);
   }
-  return finish(decision, { query, config, db, nowSeconds, input });
+  return finish(decision, { query, config, db, nowSeconds, input }, refreshed);
 };
 
 // src/commands/setup.ts
 import { basename as basename4 } from "node:path";
 
 // src/commands/detect.ts
-import { existsSync as existsSync8, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync10, readdirSync as readdirSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
 var DEV_DIR_NAMES = ["dev", "code", "src", "projects", "work", "Developer", "repos", "git"];
@@ -1291,7 +1439,7 @@ var detectRoots = (home = homedir2()) => {
   const roots = [];
   for (const name of DEV_DIR_NAMES) {
     const dir = join5(home, name);
-    if (existsSync8(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
+    if (existsSync10(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
   }
   for (const cloud of cloudRoots(home)) {
     const hub = bestHub(cloud);
@@ -1307,6 +1455,7 @@ var SHELL_LINES = {
   fish: "cdai init fish | source   # in ~/.config/fish/config.fish"
 };
 var DEFAULT_SHELL = "zsh";
+var AI_DISCLOSURE = "vague queries and candidate directory paths may be sent to that backend";
 var currentShell = () => {
   const shell = process.env["SHELL"];
   if (shell === void 0 || shell === "") return DEFAULT_SHELL;
@@ -1327,7 +1476,29 @@ var acceptedRoots = (candidates, all) => {
   candidates.forEach((root) => note(`      ${contractTilde(root.path)} (depth ${root.depth})`));
   return [...candidates];
 };
+var selectedAi = (existing, args, all) => {
+  if (args.includes("--no-ai")) return { ...existing.ai, enabled: false };
+  if (args.includes("--ai")) return { ...existing.ai, enabled: true };
+  if (existing.roots.length > 0) return existing.ai;
+  if (all) return { ...DEFAULT_AI };
+  const enabled = confirm(`cdai: enable optional AI fallback? ${AI_DISCLOSURE}`);
+  return { ...DEFAULT_AI, enabled };
+};
+var reportAi2 = (ai) => {
+  if (!ai.enabled) {
+    note("cdai: AI fallback disabled (enable later with `cdai setup --ai`)");
+    return;
+  }
+  const backend2 = resolveAiBackend(ai);
+  note(`cdai: AI fallback enabled via ${backend2 === null ? ai.command : backendLabel(backend2)}`);
+  note(`      ${AI_DISCLOSURE}`);
+  note("      disable it any time with `cdai setup --no-ai`");
+};
 var runSetup = (args) => {
+  if (args.includes("--ai") && args.includes("--no-ai")) {
+    fail("choose either --ai or --no-ai, not both");
+    return EXIT.error;
+  }
   const all = args.includes("--yes");
   const existing = loadConfig();
   const candidates = detectRoots().filter(
@@ -1342,33 +1513,17 @@ var runSetup = (args) => {
   const config = {
     roots: mergeRoots(existing.roots, acceptedRoots(candidates, all)),
     ignore: existing.ignore.length > 0 ? existing.ignore : [...DEFAULT_IGNORE],
-    ai: existing.roots.length > 0 ? existing.ai : { ...DEFAULT_AI }
+    ai: selectedAi(existing, args, all)
   };
   saveConfig(config);
   note(`cdai: wrote ${configFile()}`);
+  reportAi2(config.ai);
   const index = refreshIndex(config);
   note(`cdai: indexed ${index.entries.length} directories`);
   note("cdai: add this line to your shell config, then open a new shell");
   note(`      ${SHELL_LINES[currentShell()] ?? SHELL_LINES[DEFAULT_SHELL] ?? ""}`);
   return EXIT.ok;
 };
-
-// src/shell/control.ts
-var CLI_CONTROLS = [
-  "init",
-  "setup",
-  "index",
-  "import",
-  "doctor",
-  "query",
-  "complete",
-  "--help",
-  "-h",
-  "--version",
-  "-v"
-];
-var CLI_CONTROL_PATTERN = CLI_CONTROLS.join("|");
-var CLI_CONTROL_WORDS = CLI_CONTROLS.join(" ");
 
 // src/shell/quote.ts
 var shellQuote = (value) => `'${value.split(`'`).join(`'\\''`)}'`;
@@ -1393,33 +1548,56 @@ esac`;
 var runner = () => `__cdai_run() {
   command \${CDAI_BIN:-cdai} "$@"
 }`;
+var parser = () => `__cdai_parse() {
+  _CDAI_CD_FLAGS=()
+  _CDAI_QUERY=()
+  local arg parsing=1
+  for arg in "$@"; do
+    if [ "$parsing" -eq 1 ] && [ "$arg" = "--" ]; then
+      parsing=0
+    elif [ "$parsing" -eq 1 ] && [[ "$arg" =~ ^-[${BASH_CD_FLAG_CHARS}]+$ ]]; then
+      _CDAI_CD_FLAGS+=("$arg")
+    elif [ "$parsing" -eq 1 ] && [[ "$arg" == [-+]* ]]; then
+      return 1
+    else
+      parsing=0
+      _CDAI_QUERY+=("$arg")
+    fi
+  done
+}`;
 var jumper = () => `cdai() {
   case "\${1-}" in
     ${CLI_CONTROL_PATTERN}) __cdai_run "$@"; return $? ;;
   esac
-  if [ "$#" -gt 0 ] && [ "\${1#-}" != "$1" ]; then
+  builtin cd "$@" 2>/dev/null && return
+  if ! __cdai_parse "$@"; then
     builtin cd "$@"
     return
   fi
-  builtin cd -- "$@" 2>/dev/null && return
+  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ] || [[ "\${_CDAI_QUERY[0]}" == */* || "\${_CDAI_QUERY[0]}" == '~'* ]]; then
+    builtin cd "$@"
+    return
+  fi
   local result
-  result="$(__cdai_run query -- "$@")" || return $?
-  [ -n "$result" ] && builtin cd -- "$result"
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  [ -n "$result" ] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 var completer = () => `__cdai_complete() {
   local current="\${COMP_WORDS[COMP_CWORD]}"
   local candidate
   COMPREPLY=()
   if [ "\${current#-}" != "$current" ]; then
-    COMPREPLY=( $(compgen -W '-L -P -e --' -- "$current") )
+    COMPREPLY=( $(compgen -W '-L -P -e -@ --' -- "$current") )
     return
   fi
   while IFS= read -r candidate; do
     [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
   done < <(compgen -d -- "$current")
-  while IFS= read -r candidate; do
-    [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
-  done < <(__cdai_run complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
+  if __cdai_parse "\${COMP_WORDS[@]:1}"; then
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+    done < <(__cdai_run complete -- "\${_CDAI_QUERY[@]}" 2>/dev/null)
+  fi
 }
 complete -o filenames -F __cdai_complete cdai`;
 var bashInit = () => `# cdai shell integration (bash)
@@ -1430,6 +1608,8 @@ _CDAI_DATA="$CDAI_DATA_DIR"
 ${recorder()}
 
 ${runner()}
+
+${parser()}
 
 ${jumper()}
 
@@ -1452,15 +1632,20 @@ var jumper2 = () => `function cdai
         __cdai_run $argv
         return $status
     end
-    if test (count $argv) -gt 0
-        if string match -qr '^[-+]' -- "$argv[1]"
-            builtin cd $argv
-            return
-        end
-    end
-    builtin cd -- $argv 2>/dev/null
+    builtin cd $argv 2>/dev/null
     and return
-    set -l result (__cdai_run query -- $argv)
+    set -l query $argv
+    if test (count $query) -gt 0; and test "$query[1]" = "--"
+        set -e query[1]
+    else if test (count $query) -gt 0; and string match -qr '^[-+]' -- "$query[1]"
+        builtin cd $argv
+        return $status
+    end
+    if test (count $query) -eq 0; or string match -qr '(^~|/)' -- "$query[1]"
+        builtin cd $argv
+        return $status
+    end
+    set -l result (__cdai_run query -- $query)
     or return $status
     if test -n "$result"
         builtin cd -- "$result"
@@ -1474,7 +1659,13 @@ var completer2 = () => `function __cdai_complete
             set -a words "$current"
         end
     end
-    __cdai_run complete -- $words[2..-1] 2>/dev/null
+    set -l query $words[2..-1]
+    if test (count $query) -gt 0; and test "$query[1]" = "--"
+        set -e query[1]
+    else if test (count $query) -gt 0; and string match -qr '^[-+]' -- "$query[1]"
+        return
+    end
+    __cdai_run complete -- $query 2>/dev/null
 end
 complete -c cdai -a '(__cdai_complete)'`;
 var fishInit = () => `# cdai shell integration (fish)
@@ -1502,27 +1693,51 @@ add-zsh-hook chpwd __cdai_record`;
 var runner3 = () => `__cdai_run() {
   command \${=CDAI_BIN:-cdai} "$@"
 }`;
+var parser2 = () => `__cdai_parse() {
+  typeset -ga _CDAI_CD_FLAGS _CDAI_QUERY
+  _CDAI_CD_FLAGS=()
+  _CDAI_QUERY=()
+  local arg parsing=1
+  for arg in "$@"; do
+    if (( parsing )) && [[ "$arg" == -- ]]; then
+      parsing=0
+    elif (( parsing )) && [[ "$arg" =~ ^-[${ZSH_CD_FLAG_CHARS}]+$ ]]; then
+      _CDAI_CD_FLAGS+=("$arg")
+    elif (( parsing )) && [[ "$arg" == [-+]* ]]; then
+      return 1
+    else
+      parsing=0
+      _CDAI_QUERY+=("$arg")
+    fi
+  done
+}`;
 var jumper3 = () => `cdai() {
   if (( $# > 0 )) && [[ "$1" == (${CLI_CONTROL_PATTERN}) ]]; then
     __cdai_run "$@"
     return $?
   fi
-  if (( $# > 0 )) && [[ "$1" == [-+]* ]]; then
+  builtin cd "$@" 2>/dev/null && return
+  if ! __cdai_parse "$@"; then
     builtin cd "$@"
     return
   fi
-  builtin cd -- "$@" 2>/dev/null && return
+  if (( \${#_CDAI_QUERY} == 0 )) || [[ "\${_CDAI_QUERY[1]}" == */* || "\${_CDAI_QUERY[1]}" == '~'* ]]; then
+    builtin cd "$@"
+    return
+  fi
   local result
-  result="$(__cdai_run query -- "$@")" || return $?
-  [[ -n "$result" ]] && builtin cd -- "$result"
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  [[ -n "$result" ]] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 var completer3 = () => `__cdai_complete() {
   local service=cd
   local -a indexed
   _cd
-  indexed=("\${(@f)$(__cdai_run complete -- "\${words[@]:1}" 2>/dev/null)}")
+  if __cdai_parse "\${words[@]:1}"; then
+    indexed=("\${(@f)$(__cdai_run complete -- "\${_CDAI_QUERY[@]}" 2>/dev/null)}")
+  fi
   indexed=("\${(@)indexed:#}")
-  (( \${#indexed} > 0 )) && compadd -- "\${indexed[@]}"
+  (( \${#indexed} > 0 )) && compadd -U -- "\${indexed[@]}"
 }
 
 if [[ -o interactive ]]; then
@@ -1542,6 +1757,8 @@ ${recorder3()}
 
 ${runner3()}
 
+${parser2()}
+
 ${jumper3()}
 
 ${completer3()}
@@ -1550,7 +1767,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.2.1",
+  version: "0.3.0",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {
@@ -1606,14 +1823,21 @@ var USAGE = [
   "cdai - cd with intent",
   "",
   "usage:",
-  "  cdai <words>              jump to the directory you mean (via the shell function)",
+  "  cdai [cd-options] <words> jump using native cd first, then index/memory/AI intent",
+  "  cdai <explicit/path>      native cd only; explicit paths are never guessed",
   "  cdai query -- <words>     resolve only, prints the path on stdout",
   "  cdai init <zsh|bash|fish> print the shell integration, meant for eval",
-  "  cdai setup [--yes]        detect project roots and write the config",
+  "  cdai setup [--yes] [--ai|--no-ai]",
+  "                            detect roots and choose optional AI fallback",
   "  cdai index [--refresh]    show or rebuild the directory index",
   "  cdai import zoxide        seed frecency from an existing zoxide database",
   "  cdai doctor               show what cdai sees on this machine",
-  "  cdai --version"
+  "  cdai --version",
+  "",
+  "shell behavior:",
+  "  Tab merges filesystem and cached indexed names without crawling or AI.",
+  "  zsh/Bash cd flags such as -L and -P also compose with indexed intent.",
+  "  Confirmed AI intent is remembered locally; disable AI with setup --no-ai."
 ].join("\n");
 var INIT_TEMPLATES = {
   zsh: zshInit,

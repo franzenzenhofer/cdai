@@ -19,15 +19,20 @@ const jumper = (): string => `function cdai
         __cdai_run $argv
         return $status
     end
-    if test (count $argv) -gt 0
-        if string match -qr '^[-+]' -- "$argv[1]"
-            builtin cd $argv
-            return
-        end
-    end
-    builtin cd -- $argv 2>/dev/null
+    builtin cd $argv 2>/dev/null
     and return
-    set -l result (__cdai_run query -- $argv)
+    set -l query $argv
+    if test (count $query) -gt 0; and test "$query[1]" = "--"
+        set -e query[1]
+    else if test (count $query) -gt 0; and string match -qr '^[-+]' -- "$query[1]"
+        builtin cd $argv
+        return $status
+    end
+    if test (count $query) -eq 0; or string match -qr '(^~|/)' -- "$query[1]"
+        builtin cd $argv
+        return $status
+    end
+    set -l result (__cdai_run query -- $query)
     or return $status
     if test -n "$result"
         builtin cd -- "$result"
@@ -42,7 +47,13 @@ const completer = (): string => `function __cdai_complete
             set -a words "$current"
         end
     end
-    __cdai_run complete -- $words[2..-1] 2>/dev/null
+    set -l query $words[2..-1]
+    if test (count $query) -gt 0; and test "$query[1]" = "--"
+        set -e query[1]
+    else if test (count $query) -gt 0; and string match -qr '^[-+]' -- "$query[1]"
+        return
+    end
+    __cdai_run complete -- $query 2>/dev/null
 end
 complete -c cdai -a '(__cdai_complete)'`;
 

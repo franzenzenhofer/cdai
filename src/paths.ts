@@ -25,6 +25,7 @@ export const dataDir = (): string => {
 export const configFile = (): string => join(configDir(), 'config.json');
 export const dbFile = (): string => join(dataDir(), 'db.json');
 export const indexFile = (): string => join(dataDir(), 'index.json');
+export const aliasesFile = (): string => join(dataDir(), 'aliases.json');
 export const visitsLog = (): string => join(dataDir(), 'visits.log');
 
 export const expandTilde = (input: string): string => {

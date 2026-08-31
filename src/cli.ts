@@ -16,14 +16,21 @@ const USAGE = [
   'cdai - cd with intent',
   '',
   'usage:',
-  '  cdai <words>              jump to the directory you mean (via the shell function)',
+  '  cdai [cd-options] <words> jump using native cd first, then index/memory/AI intent',
+  '  cdai <explicit/path>      native cd only; explicit paths are never guessed',
   '  cdai query -- <words>     resolve only, prints the path on stdout',
   '  cdai init <zsh|bash|fish> print the shell integration, meant for eval',
-  '  cdai setup [--yes]        detect project roots and write the config',
+  '  cdai setup [--yes] [--ai|--no-ai]',
+  '                            detect roots and choose optional AI fallback',
   '  cdai index [--refresh]    show or rebuild the directory index',
   '  cdai import zoxide        seed frecency from an existing zoxide database',
   '  cdai doctor               show what cdai sees on this machine',
   '  cdai --version',
+  '',
+  'shell behavior:',
+  '  Tab merges filesystem and cached indexed names without crawling or AI.',
+  '  zsh/Bash cd flags such as -L and -P also compose with indexed intent.',
+  '  Confirmed AI intent is remembered locally; disable AI with setup --no-ai.',
 ].join('\n');
 
 const INIT_TEMPLATES: Record<string, () => string> = {

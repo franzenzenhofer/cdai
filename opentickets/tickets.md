@@ -16,6 +16,7 @@
 
 ### TCK-001: Route management controls past the shell wrapper
 
+- Status: Done in 0.2.1
 - Epic: EPIC-001
 - Type: Bug
 - Severity: S1
@@ -38,6 +39,7 @@
 
 ### TCK-002: Compose native cd flags with indexed intent
 
+- Status: Done in 0.3.0
 - Epic: EPIC-001
 - Type: UX
 - Severity: S2
@@ -49,7 +51,7 @@
   2. Run `cdai -P <intent>` and press Tab after the flag.
 - Expected: cdai resolves the intent, then applies valid shell-native flags to the trusted result.
 - Actual: The builtin receives the unresolved word, fails, and the wrapper returns; indexed completion also disappears.
-- IS: Flags work for literal paths only.
+- IS: Fixed in 0.3.0; zsh/Bash parse valid native flags, resolve only the intent, then apply the flags to the trusted path.
 - SHOULD: Parse supported shell flags, complete the remaining intent, resolve it, and apply the original flags.
 - Reasoning: The stated product goal is native `cd` behavior plus intent, so these capabilities must compose.
 - Code hints: zsh/Bash/fish jumpers and completers; table-driven flag matrices per shell.
@@ -61,6 +63,7 @@
 
 ### TCK-003: Preserve native errors for explicit missing paths
 
+- Status: Done in 0.3.0
 - Epic: EPIC-001
 - Type: Bug
 - Severity: S2
@@ -72,7 +75,7 @@
   2. Observe fallback behavior and error text.
 - Expected: Explicit path syntax stays native-only and reports the shell builtin error.
 - Actual: The native error is suppressed and the path can be fuzzy/AI-rerouted as intent.
-- IS: Any failed non-option native call falls through to query resolution.
+- IS: Fixed in 0.3.0; slash-bearing and tilde-shaped arguments remain native-only after failure.
 - SHOULD: Treat slash-bearing/path-shaped arguments as authoritative native paths.
 - Reasoning: Explicit syntax signals strong intent; silently guessing another destination is unsafe.
 - Code hints: native-first decision in all three shell templates; path-shape parity tests.
@@ -83,6 +86,7 @@
 
 ### TCK-004: Add behavioral completion parity and duplicate context
 
+- Status: Done in 0.3.0
 - Epic: EPIC-002
 - Type: UX
 - Severity: S2
@@ -94,7 +98,7 @@
   2. Complete a partial name in zsh, Bash, and fish, with and without flags.
 - Expected: Safe insertion, useful root/path context, and equivalent supported behavior across shells.
 - Actual: zsh was interactively verified, Bash has partial automation, fish has no runtime test, and duplicate names collapse to one bare label.
-- IS: Endpoint behavior is deterministic, cached, and AI-free, but coverage and context are incomplete.
+- IS: Fixed in 0.3.0 with flag stripping, stale-history rejection, duplicate full paths, Bash/zsh E2E, and fish CI coverage.
 - SHOULD: Add real shell-level completion tests and shell-appropriate descriptions for duplicates.
 - Reasoning: Tab is a primary flow; generated-script assertions alone cannot catch quoting or cursor bugs.
 - Code hints: `src/commands/complete.ts`, shell completers, CI image with fish, PTY completion harness.
@@ -105,6 +109,7 @@
 
 ### TCK-005: Refresh stale or vanished confident hits once
 
+- Status: Done in 0.3.0
 - Epic: EPIC-002
 - Type: Bug
 - Severity: S3
@@ -116,7 +121,7 @@
   2. Run the same intent while the cache is stale.
 - Expected: cdai refreshes once, re-resolves, and either finds the new entry or gives current suggestions.
 - Actual: Refresh only occurs for an `unsure` decision; a vanished clear hit errors without retrying.
-- IS: Confidence can prevent stale-cache recovery.
+- IS: Fixed in 0.3.0; vanished hits refresh and re-resolve once, and index config fingerprints invalidate changed roots/depth/ignore.
 - SHOULD: On a nonexistent hit, refresh at most once and resolve again; consider a config fingerprint later.
 - Reasoning: Users care about filesystem truth, not the confidence of an obsolete snapshot.
 - Code hints: query orchestration and index metadata; guard against repeated crawls.
@@ -127,6 +132,7 @@
 
 ### TCK-006: Disclose AI selection and remember confirmed intent locally
 
+- Status: Done in 0.3.0
 - Epic: EPIC-003
 - Type: UX
 - Severity: S3
@@ -138,7 +144,7 @@
   2. Confirm an AI-selected directory, then repeat the same intent.
 - Expected: Setup names the backend/data exposure and the confirmed intent resolves locally on repeat.
 - Actual: AI defaults to auto with limited onboarding disclosure; confirmed phrasing is not remembered.
-- IS: Only path frecency is stored, so repeated semantic phrasing can incur model latency again.
+- IS: Fixed in 0.3.0 with setup disclosure/opt-out and a bounded, versioned, validated local alias store.
 - SHOULD: Offer a clear opt-out and store only normalized, confirmed intent aliases with safe invalidation.
 - Reasoning: Progressive trust reduces privacy surprise, latency, and repeated model cost.
 - Code hints: setup copy/config flow, a small versioned alias store, query fast path before AI.

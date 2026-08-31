@@ -2,7 +2,15 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
-import { buildIndex, childrenOf, emptyIndex, isStale, loadIndex, refreshIndex } from '../src/store/indexer.js';
+import {
+  buildIndex,
+  childrenOf,
+  emptyIndex,
+  isStale,
+  loadIndex,
+  matchesConfig,
+  refreshIndex,
+} from '../src/store/indexer.js';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
 let fixture: Fixture;
@@ -92,6 +100,23 @@ describe('index persistence', () => {
 
   it('is fresh right after a refresh', () => {
     expect(isStale(refreshIndex(loadConfig()), Date.now())).toBe(false);
+  });
+
+  it('invalidates an index when roots, depth, or ignore configuration changes', () => {
+    const config = loadConfig();
+    const index = refreshIndex(config);
+    expect(matchesConfig(index, config)).toBe(true);
+    expect(matchesConfig(index, { ...config, ignore: [...config.ignore, 'tmp'] })).toBe(false);
+    expect(matchesConfig(index, { ...config, roots: [{ ...config.roots[0]!, depth: 9 }] })).toBe(false);
+  });
+
+  it('loads an older unsigned index as rebuildable but configuration-mismatched', () => {
+    const config = loadConfig();
+    writeFileSync(
+      join(fixture.dataDir, 'index.json'),
+      JSON.stringify({ version: 1, generatedAt: Date.now(), entries: [] }),
+    );
+    expect(matchesConfig(loadIndex(), config)).toBe(false);
   });
 
   it('treats a future cache timestamp as stale after clock skew', () => {
