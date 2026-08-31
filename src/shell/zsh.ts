@@ -101,7 +101,7 @@ const completer = (): string => `__cdai_complete() {
 
 if [[ -o interactive ]]; then
   autoload -Uz compinit
-  (( $+functions[compdef] )) || compinit
+  (( $+functions[compdef] )) || compinit -i
   autoload -Uz _cd
   compdef __cdai_complete cdai
 fi`;

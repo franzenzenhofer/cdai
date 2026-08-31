@@ -83,6 +83,7 @@ describe('cdai init zsh', () => {
     expect(init.status).toBe(0);
     expect(init.stderr).toBe('');
     expect(init.stdout).toContain('add-zsh-hook chpwd __cdai_record');
+    expect(init.stdout).toContain('compinit -i');
     expect(init.stdout).toContain('compdef __cdai_complete cdai');
     const evaluated = runZsh(withInit('typeset -f cdai > /dev/null && print ok'));
     expect(evaluated.stdout.trim()).toBe('ok');
