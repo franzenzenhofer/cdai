@@ -31,16 +31,22 @@ if [ -e "$D" ]; then
   mv "$D" "$TRASHED"
   echo "previous demo moved to trash: $TRASHED"
 fi
-mkdir -p "$D/dev" "$D/Dropbox/clients" "$D/.config/cdai"
+mkdir -p "$D/dev" "$D/Dropbox/clients" "$D/.config/cdai" "$D/bin"
 (cd "$D/dev" && mkdir -p squash tabletop-3d tabletop-web almanac blog dotfiles)
 (cd "$D/Dropbox/clients" && mkdir -p petalworks/petalworks-2024 petalworks/petalworks-2025 petalworks/petalworks-2026 acme-shop/acme-shop-2025 orbit)
 touch -t 202401150800 "$D/Dropbox/clients/petalworks/petalworks-2024"
 touch -t 202502100900 "$D/Dropbox/clients/petalworks/petalworks-2025"
 touch -t 202608201000 "$D/Dropbox/clients/petalworks/petalworks-2026"
+cat > "$D/bin/demo-ai" <<AI
+#!/bin/sh
+sleep 1
+printf '%s\n' '{"path":"$D/Dropbox/clients/petalworks","reason":"flowers means petalworks"}'
+AI
+chmod 700 "$D/bin/demo-ai"
 cat > "$D/.config/cdai/config.json" <<CFG
 { "roots": [ { "path": "$D/dev", "depth": 2 }, { "path": "$D/Dropbox/clients", "depth": 3 } ],
   "ignore": ["node_modules", ".git"],
-  "ai": { "enabled": false, "command": "claude", "model": "sonnet", "timeoutMs": 45000 } }
+  "ai": { "enabled": true, "command": "$D/bin/demo-ai", "model": "", "timeoutMs": 5000 } }
 CFG
 cat > "$D/setup.zsh" <<SETUP
 export HOME="$D"
@@ -52,9 +58,6 @@ cdai index --refresh 2>/dev/null
 clear
 SETUP
 mkdir -p "$D/.local/share/cdai"
-cat > "$D/.local/share/cdai/aliases.json" <<ALIASES
-{ "version": 1, "aliases": [ { "query": "flowers client", "path": "$D/Dropbox/clients/petalworks", "updatedAt": 1788148800000 } ] }
-ALIASES
 chmod 700 "$D/.config/cdai" "$D/.local/share/cdai"
-chmod 600 "$D/.config/cdai/config.json" "$D/.local/share/cdai/aliases.json"
+chmod 600 "$D/.config/cdai/config.json"
 echo "demo tree ready at $D - record with: vhs docs/demo.tape"

@@ -8,7 +8,12 @@
 such as `latest` or `2025`, and can use an optional AI fallback that is not allowed to invent a
 path. The fast path and every Tab completion are deterministic and model-free.
 
-![cdai terminal demo: smart Tab, latest folder, and a remembered alias](docs/demo.gif)
+![cdai terminal demo: smart Tab, latest folder, picker, AI confirmation, and remembered alias](docs/demo.gif)
+
+The GIF runs the real completion, picker, AI validation, confirmation and alias paths. Its AI
+backend is a deterministic local shim from `docs/demo-fixture.sh`, so the recording is repeatable
+and never needs network access or model credentials. Re-record it with
+`sh docs/demo-fixture.sh && vhs docs/demo.tape` (requires `vhs` and `fzf`).
 
 ## The 30-second version
 

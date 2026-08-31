@@ -20,8 +20,20 @@ Sleep 1800ms
 Type "cdai latest petalworks folder"
 Sleep 600ms
 Enter
-Sleep 2200ms
-Type "cdai flowers client"
+Sleep 1800ms
+Type "cdai tabletop"
+Enter
+Sleep 1800ms
+Down
 Sleep 600ms
 Enter
+Sleep 1800ms
+Type "cdai flowers client"
+Enter
+Sleep 2200ms
+Enter
+Sleep 1800ms
+Type "cdai flowers client"
+Enter
+Sleep 2200ms
 Sleep 2500ms
