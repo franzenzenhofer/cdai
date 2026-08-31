@@ -72,6 +72,75 @@ For non-interactive setup, consent is deliberately explicit:
 cdai setup --root "$HOME/dev" --depth 3 --yes --no-ai
 ```
 
+## Everyday usage
+
+| You type | What happens |
+|---|---|
+| `cdai petal` | jump to the best name match, ranked by context and frecency |
+| `cdai latest petalworks folder` | open the newest child directory, by modification time |
+| `cdai oldest petalworks` | open the oldest child directory |
+| `cdai petalworks 2025` | require `2025` somewhere in the matched path |
+| `cdai squash in dev` | restrict the search to the matching configured root |
+| `cdai -P petal` | resolve the match to its physical path, following symlinks |
+| `cdai ~/some/dir` | use native `cd`; explicit paths are never guessed |
+| `cdai -` | use native `cd -` to return to the previous directory |
+| `cdai` | use native `cd` to return home |
+
+## Smart Tab completion
+
+Tab merges the shell's native directories and CDPATH with cdai's cached index, frecency, current
+directory context and confirmed aliases.
+
+```console
+$ cdai gma<Tab>       # goalmap: compact subsequence
+$ cdai petla<Tab>     # petalworks: bounded typo correction
+$ cdai latest pet<Tab>
+```
+
+Prefix results may fan out, but a non-prefix correction must have one clear winner. Ambiguous or
+unrelated text is left untouched. Duplicate names complete to the shared basename and are
+disambiguated by the picker after Enter.
+
+Tab reads local cached state only. It never calls AI, opens a picker, refreshes the index, ingests
+history or crawls the filesystem.
+
+## Native `cd` behavior and flags
+
+The shell wrapper always gives native behavior the first chance:
+
+- `cdai`, `cdai -`, explicit paths, CDPATH and zsh's `cd old new` substitution stay native.
+- `-L` preserves the logical symlink path; `-P` resolves symlinks to the physical path. Both
+  compose with intent in zsh/Bash, and Fish support is feature-detected by version.
+- Stack syntax, late or invalid flags, and failed path-shaped input are never guessed.
+- Existing local directories win even when their name is also a cdai command.
+- Human messages go to stderr; `cdai query` reserves stdout for the resolved path.
+
+Cache migrations happen automatically. After an upgrade, start a new shell to load the latest
+wrapper; `cdai doctor` reports stale or partial state and the exact repair command.
+
+## Command reference
+
+```text
+cdai [cd-options] <words> native cd first, then indexed/remembered/AI intent
+cdai <explicit/path>      native cd only; never fuzzy or AI-rerouted
+cdai query -- <words>     resolve only, prints the path on stdout
+cdai init <zsh|bash|fish> print the shell integration, meant for eval
+cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]
+           [--remove-root <path>]
+                          detect or add roots and choose optional AI fallback
+cdai index [--refresh]    show or rebuild the directory index
+cdai import zoxide        seed frecency from an existing zoxide database
+cdai alias list           show confirmed local intent aliases
+cdai alias forget -- <words>
+                          forget a mistaken confirmed alias
+cdai doctor               show what cdai sees on this machine
+cdai --version
+```
+
+Exit codes: `0` success, `3` a navigation choice was deliberately aborted, anything else is an
+error. stdout carries the resolved path and nothing else; every human-readable byte goes to
+stderr.
+
 ## Why this exists
 
 I use [zoxide](https://github.com/ajeetdsouza/zoxide), and cdai deliberately uses the same
@@ -94,24 +163,6 @@ makes a never-visited directory a first-class candidate.
 Use zoxide if visited-directory frecency is the whole problem; it is mature, fast and ships as
 a static binary. Use cdai if cold directories, deterministic intent and guarded natural-language
 fallback are useful enough to justify a Node executable.
-
-## Smart Tab, not just `cd` completion
-
-Tab merges the shell's native directories and CDPATH with cdai's cached index, frecency, current
-directory context and confirmed aliases.
-
-```console
-$ cdai gma<Tab>       # goalmap: compact subsequence
-$ cdai petla<Tab>     # petalworks: bounded typo correction
-$ cdai latest pet<Tab>
-```
-
-The safety rule is intentionally conservative: prefix results may fan out, but a non-prefix
-correction must have one clear winner. Ambiguous or unrelated text is left untouched. Duplicate
-directory names complete to the shared basename and are disambiguated by the picker after Enter.
-
-Tab reads local cached state only. It never calls AI, opens a picker, refreshes the index, ingests
-history or crawls the filesystem.
 
 ## The AI cannot hallucinate a directory
 
@@ -172,9 +223,6 @@ real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry in
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
 
-<details>
-<summary><strong>Architecture and scoring</strong></summary>
-
 ## How it works
 
 ```
@@ -207,39 +255,6 @@ word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecenc
 bonus for living under your current directory. All tokens must match (AND). A directory and its
 own parent collapse into one answer, because they are the same place, not two options. Every
 threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
-
-### Deterministic operators
-
-| You type | You get |
-|---|---|
-| `cdai petal` | best match by fuzzy score and frecency |
-| `cdai latest petalworks folder` | newest child directory of the match, by mtime |
-| `cdai oldest petalworks` | oldest child directory |
-| `cdai petalworks 2025` | year token is a required substring |
-| `cdai squash in dev` | `in <root>` restricts the search to one root |
-| `cdai -P petal` | resolve the match to its physical path, following symlinks |
-| `cdai ~/some/dir` | plain `cd`, no magic, no lookup |
-| `cdai -` | plain `cd -`, back to the previous directory |
-| `cdai` | plain `cd ~`, muscle memory stays intact |
-
-</details>
-
-## Native `cd` compatibility
-
-The shell wrapper always gives native behavior the first chance:
-
-- `cdai`, `cdai -`, explicit paths, CDPATH and zsh's `cd old new` substitution stay native.
-- `-L` preserves the logical symlink path; `-P` resolves symlinks to the physical path. Both
-  compose with intent in zsh/Bash, and Fish support is feature-detected by version.
-- Stack syntax, late or invalid flags, and failed path-shaped input are never guessed.
-- Existing local directories win even when their name is also a cdai command.
-- Human messages go to stderr; `cdai query` reserves stdout for the resolved path.
-
-Cache migrations happen automatically. After an upgrade, start a new shell to load the latest
-wrapper; `cdai doctor` reports stale or partial state and the exact repair command.
-
-<details>
-<summary><strong>Optional AI backends and privacy</strong></summary>
 
 ## AI backends
 
@@ -297,11 +312,6 @@ The chosen backend receives the words you typed, your cwd, and up to 50 in-root 
 **paths** - never file contents. With Apfel or Ollama that stays local; cloud-backed CLIs apply
 their own privacy and billing policies.
 
-</details>
-
-<details>
-<summary><strong>Configuration and local state</strong></summary>
-
 ## Configuration
 
 `~/.config/cdai/config.json` (override with `CDAI_CONFIG_DIR`, data with `CDAI_DATA_DIR`):
@@ -324,36 +334,6 @@ Config/state directories are mode `0700` and files `0600`; each invocation tight
 from older installs. The index carries a roots/depth/ignore fingerprint, reports partial crawls,
 and is rebuilt automatically when that configuration changes. Concurrent shells serialize
 short atomic updates so visits and aliases are not lost or double-counted.
-
-</details>
-
-<details>
-<summary><strong>Command reference</strong></summary>
-
-## Commands
-
-```
-cdai [cd-options] <words> native cd first, then indexed/remembered/AI intent
-cdai <explicit/path>      native cd only; never fuzzy or AI-rerouted
-cdai query -- <words>     resolve only, prints the path on stdout
-cdai init <zsh|bash|fish> print the shell integration, meant for eval
-cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]
-           [--remove-root <path>]
-                          detect or add roots and choose optional AI fallback
-cdai index [--refresh]    show or rebuild the directory index
-cdai import zoxide        seed frecency from an existing zoxide database
-cdai alias list           show confirmed local intent aliases
-cdai alias forget -- <words>
-                          forget a mistaken confirmed alias
-cdai doctor               show what cdai sees on this machine
-cdai --version
-```
-
-Exit codes: `0` success, `3` a navigation choice was deliberately aborted, anything else is an
-error. stdout carries the resolved path and nothing else; every human readable byte goes to
-stderr.
-
-</details>
 
 ## Limitations
 
