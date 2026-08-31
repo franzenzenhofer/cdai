@@ -42,6 +42,12 @@ const expectFast = (timings: readonly number[]): void => {
   expect(percentile(timings, 0.95)).toBeLessThan(P95_BUDGET_MS);
 };
 
+/** Core matching is synchronous; CPU time measures its work without counting CI descheduling. */
+const elapsedCpuMs = (started: ReturnType<typeof process.cpuUsage>): number => {
+  const elapsed = process.cpuUsage(started);
+  return (elapsed.user + elapsed.system) / 1000;
+};
+
 beforeAll(() => {
   expect(spawnSync('node', [join(REPO, 'scripts', 'build.mjs')], { encoding: 'utf8' }).status).toBe(0);
 });
@@ -113,10 +119,10 @@ describe('latency', () => {
     const index: DirIndex = {
       version: 3, generatedAt: Date.now(), configKey: '', truncated: null, entries,
     };
-    const started = Date.now();
+    const started = process.cpuUsage();
     expect(completeQuery(['abcdefgh'], {
       index, db: emptyDb(), cwd: fixture.rootDir, nowSeconds: Math.floor(Date.now() / 1000),
     })).toHaveLength(1);
-    expect(Date.now() - started).toBeLessThan(LARGE_CORE_BUDGET_MS);
+    expect(elapsedCpuMs(started)).toBeLessThan(LARGE_CORE_BUDGET_MS);
   });
 });
