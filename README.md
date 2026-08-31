@@ -17,7 +17,7 @@ $ cdai pet<Tab>
 $ cdai petalworks
 → ~/Dropbox/clients/petalworks
 
-$ cdai -P latest petalworks folder
+$ cdai latest petalworks folder
 → ~/Dropbox/clients/petalworks/petalworks-2026
 
 $ cdai petalworks 2025
@@ -217,6 +217,7 @@ threshold in the diagram lives in one small file: [`src/match/constants.ts`](src
 | `cdai oldest petalworks` | oldest child directory |
 | `cdai petalworks 2025` | year token is a required substring |
 | `cdai squash in dev` | `in <root>` restricts the search to one root |
+| `cdai -P petal` | resolve the match to its physical path, following symlinks |
 | `cdai ~/some/dir` | plain `cd`, no magic, no lookup |
 | `cdai -` | plain `cd -`, back to the previous directory |
 | `cdai` | plain `cd ~`, muscle memory stays intact |
@@ -228,7 +229,8 @@ threshold in the diagram lives in one small file: [`src/match/constants.ts`](src
 The shell wrapper always gives native behavior the first chance:
 
 - `cdai`, `cdai -`, explicit paths, CDPATH and zsh's `cd old new` substitution stay native.
-- zsh/Bash `-L` and `-P` compose with intent; Fish flags are feature-detected by version.
+- `-L` preserves the logical symlink path; `-P` resolves symlinks to the physical path. Both
+  compose with intent in zsh/Bash, and Fish support is feature-detected by version.
 - Stack syntax, late or invalid flags, and failed path-shaped input are never guessed.
 - Existing local directories win even when their name is also a cdai command.
 - Human messages go to stderr; `cdai query` reserves stdout for the resolved path.

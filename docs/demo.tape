@@ -17,7 +17,7 @@ Tab
 Sleep 900ms
 Enter
 Sleep 1800ms
-Type "cdai -P latest petalworks folder"
+Type "cdai latest petalworks folder"
 Sleep 600ms
 Enter
 Sleep 2200ms
