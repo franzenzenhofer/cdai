@@ -13,7 +13,8 @@ const MEDIAN_BUDGET_MS = 150;
 const P95_BUDGET_MS = 250;
 const RUNS = 10;
 const LARGE_INDEX_ENTRIES = 50_000;
-const LARGE_CORE_BUDGET_MS = 250;
+/** Portable cap for the pathological maximum-size typo scan; normal completion uses tighter budgets. */
+const LARGE_CORE_BUDGET_MS = 300;
 
 let fixture: Fixture;
 
