@@ -247,7 +247,7 @@ var EXIT = {
   ok: 0,
   /** Something went wrong (no match, bad usage, unreadable config). */
   error: 1,
-  /** Handled, but deliberately no cd (user aborted the picker, doctor/setup output). */
+  /** A navigation request was handled but deliberately aborted, so the shell stays put. */
   noCd: 3
 };
 var emitPath = (path) => {
@@ -592,7 +592,7 @@ var runDoctor = () => {
   note(`visits ${mark(existsSync5(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable("fzf") !== null)}`);
   note(`tty    ${mark(hasTty())}`);
-  return EXIT.noCd;
+  return EXIT.ok;
 };
 
 // src/match/resolve.ts
@@ -944,7 +944,7 @@ var runImportZoxide = () => {
   }
   saveDb({ version: db.version, records: [...byPath.values()] });
   note(`cdai: imported ${imported.length} paths from zoxide`);
-  return EXIT.noCd;
+  return EXIT.ok;
 };
 
 // src/commands/index-cmd.ts
@@ -959,7 +959,7 @@ var runIndex = (args) => {
     const started = Date.now();
     const index2 = refreshIndex(config);
     note(`cdai: indexed ${index2.entries.length} directories in ${Date.now() - started}ms`);
-    return EXIT.noCd;
+    return EXIT.ok;
   }
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE2);
@@ -968,7 +968,7 @@ var runIndex = (args) => {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);
   }
-  return EXIT.noCd;
+  return EXIT.ok;
 };
 
 // src/commands/query.ts
@@ -1350,8 +1350,25 @@ var runSetup = (args) => {
   note(`cdai: indexed ${index.entries.length} directories`);
   note("cdai: add this line to your shell config, then open a new shell");
   note(`      ${SHELL_LINES[currentShell()] ?? SHELL_LINES[DEFAULT_SHELL] ?? ""}`);
-  return EXIT.noCd;
+  return EXIT.ok;
 };
+
+// src/shell/control.ts
+var CLI_CONTROLS = [
+  "init",
+  "setup",
+  "index",
+  "import",
+  "doctor",
+  "query",
+  "complete",
+  "--help",
+  "-h",
+  "--version",
+  "-v"
+];
+var CLI_CONTROL_PATTERN = CLI_CONTROLS.join("|");
+var CLI_CONTROL_WORDS = CLI_CONTROLS.join(" ");
 
 // src/shell/quote.ts
 var shellQuote = (value) => `'${value.split(`'`).join(`'\\''`)}'`;
@@ -1373,14 +1390,20 @@ case "$PROMPT_COMMAND" in
   *__cdai_record*) ;;
   *) PROMPT_COMMAND="__cdai_record\${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
 esac`;
+var runner = () => `__cdai_run() {
+  command \${CDAI_BIN:-cdai} "$@"
+}`;
 var jumper = () => `cdai() {
+  case "\${1-}" in
+    ${CLI_CONTROL_PATTERN}) __cdai_run "$@"; return $? ;;
+  esac
   if [ "$#" -gt 0 ] && [ "\${1#-}" != "$1" ]; then
     builtin cd "$@"
     return
   fi
   builtin cd -- "$@" 2>/dev/null && return
   local result
-  result="$(command \${CDAI_BIN:-cdai} query -- "$@")" || return $?
+  result="$(__cdai_run query -- "$@")" || return $?
   [ -n "$result" ] && builtin cd -- "$result"
 }`;
 var completer = () => `__cdai_complete() {
@@ -1396,7 +1419,7 @@ var completer = () => `__cdai_complete() {
   done < <(compgen -d -- "$current")
   while IFS= read -r candidate; do
     [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
-  done < <(command \${CDAI_BIN:-cdai} complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
+  done < <(__cdai_run complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
 }
 complete -o filenames -F __cdai_complete cdai`;
 var bashInit = () => `# cdai shell integration (bash)
@@ -1405,6 +1428,8 @@ _CDAI_DATA="$CDAI_DATA_DIR"
 [ -d "$_CDAI_DATA" ] || mkdir -p "$_CDAI_DATA"
 
 ${recorder()}
+
+${runner()}
 
 ${jumper()}
 
@@ -1415,7 +1440,18 @@ ${completer()}
 var recorder2 = () => `function __cdai_record --on-variable PWD
     printf '%s\\t%s\\n' (date +%s) "$PWD" >> "$CDAI_DATA_DIR/visits.log" 2>/dev/null
 end`;
+var runner2 = () => `function __cdai_run
+    set -l bin cdai
+    if set -q CDAI_BIN
+        set bin (string split ' ' -- $CDAI_BIN)
+    end
+    command $bin $argv
+end`;
 var jumper2 = () => `function cdai
+    if test (count $argv) -gt 0; and contains -- "$argv[1]" ${CLI_CONTROL_WORDS}
+        __cdai_run $argv
+        return $status
+    end
     if test (count $argv) -gt 0
         if string match -qr '^[-+]' -- "$argv[1]"
             builtin cd $argv
@@ -1424,21 +1460,13 @@ var jumper2 = () => `function cdai
     end
     builtin cd -- $argv 2>/dev/null
     and return
-    set -l bin cdai
-    if set -q CDAI_BIN
-        set bin (string split ' ' -- $CDAI_BIN)
-    end
-    set -l result (command $bin query -- $argv)
+    set -l result (__cdai_run query -- $argv)
     or return $status
     if test -n "$result"
         builtin cd -- "$result"
     end
 end`;
 var completer2 = () => `function __cdai_complete
-    set -l bin cdai
-    if set -q CDAI_BIN
-        set bin (string split ' ' -- $CDAI_BIN)
-    end
     set -l words (commandline -opc)
     set -l current (commandline -ct)
     if test -n "$current"
@@ -1446,7 +1474,7 @@ var completer2 = () => `function __cdai_complete
             set -a words "$current"
         end
     end
-    command $bin complete -- $words[2..-1] 2>/dev/null
+    __cdai_run complete -- $words[2..-1] 2>/dev/null
 end
 complete -c cdai -a '(__cdai_complete)'`;
 var fishInit = () => `# cdai shell integration (fish)
@@ -1459,6 +1487,8 @@ end
 
 ${recorder2()}
 
+${runner2()}
+
 ${jumper2()}
 
 ${completer2()}
@@ -1469,21 +1499,28 @@ var recorder3 = () => `__cdai_record() {
   print -r -- "\${EPOCHSECONDS}"$'\\t'"\${PWD}" >> "$_CDAI_DATA/visits.log" 2>/dev/null
 }
 add-zsh-hook chpwd __cdai_record`;
+var runner3 = () => `__cdai_run() {
+  command \${=CDAI_BIN:-cdai} "$@"
+}`;
 var jumper3 = () => `cdai() {
+  if (( $# > 0 )) && [[ "$1" == (${CLI_CONTROL_PATTERN}) ]]; then
+    __cdai_run "$@"
+    return $?
+  fi
   if (( $# > 0 )) && [[ "$1" == [-+]* ]]; then
     builtin cd "$@"
     return
   fi
   builtin cd -- "$@" 2>/dev/null && return
   local result
-  result="$(command \${=CDAI_BIN:-cdai} query -- "$@")" || return $?
+  result="$(__cdai_run query -- "$@")" || return $?
   [[ -n "$result" ]] && builtin cd -- "$result"
 }`;
 var completer3 = () => `__cdai_complete() {
   local service=cd
   local -a indexed
   _cd
-  indexed=("\${(@f)$(command \${=CDAI_BIN:-cdai} complete -- "\${words[@]:1}" 2>/dev/null)}")
+  indexed=("\${(@f)$(__cdai_run complete -- "\${words[@]:1}" 2>/dev/null)}")
   indexed=("\${(@)indexed:#}")
   (( \${#indexed} > 0 )) && compadd -- "\${indexed[@]}"
 }
@@ -1503,6 +1540,8 @@ typeset -g _CDAI_DATA=\${CDAI_DATA_DIR}
 
 ${recorder3()}
 
+${runner3()}
+
 ${jumper3()}
 
 ${completer3()}
@@ -1511,7 +1550,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.2.0",
+  version: "0.2.1",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {
@@ -1605,11 +1644,11 @@ var dispatch = async (args) => {
   const command = args[0];
   if (command === void 0 || command === "--help" || command === "-h") {
     note(USAGE);
-    return command === void 0 ? EXIT.error : EXIT.noCd;
+    return command === void 0 ? EXIT.error : EXIT.ok;
   }
   if (command === "--version" || command === "-v") {
     note(VERSION);
-    return EXIT.noCd;
+    return EXIT.ok;
   }
   if (command === "init") return runInit(args[1]);
   if (command === "setup") return runSetup(args.slice(1));

@@ -1,4 +1,5 @@
 import { dataDir } from '../paths.js';
+import { CLI_CONTROL_PATTERN } from './control.js';
 import { shellQuote } from './quote.js';
 
 const recorder = (): string => `__cdai_record() {
@@ -6,14 +7,22 @@ const recorder = (): string => `__cdai_record() {
 }
 add-zsh-hook chpwd __cdai_record`;
 
+const runner = (): string => `__cdai_run() {
+  command \${=CDAI_BIN:-cdai} "$@"
+}`;
+
 const jumper = (): string => `cdai() {
+  if (( $# > 0 )) && [[ "$1" == (${CLI_CONTROL_PATTERN}) ]]; then
+    __cdai_run "$@"
+    return $?
+  fi
   if (( $# > 0 )) && [[ "$1" == [-+]* ]]; then
     builtin cd "$@"
     return
   fi
   builtin cd -- "$@" 2>/dev/null && return
   local result
-  result="$(command \${=CDAI_BIN:-cdai} query -- "$@")" || return $?
+  result="$(__cdai_run query -- "$@")" || return $?
   [[ -n "$result" ]] && builtin cd -- "$result"
 }`;
 
@@ -21,7 +30,7 @@ const completer = (): string => `__cdai_complete() {
   local service=cd
   local -a indexed
   _cd
-  indexed=("\${(@f)$(command \${=CDAI_BIN:-cdai} complete -- "\${words[@]:1}" 2>/dev/null)}")
+  indexed=("\${(@f)$(__cdai_run complete -- "\${words[@]:1}" 2>/dev/null)}")
   indexed=("\${(@)indexed:#}")
   (( \${#indexed} > 0 )) && compadd -- "\${indexed[@]}"
 }
@@ -45,6 +54,8 @@ typeset -g _CDAI_DATA=\${CDAI_DATA_DIR}
 [[ -d "$_CDAI_DATA" ]] || mkdir -p "$_CDAI_DATA"
 
 ${recorder()}
+
+${runner()}
 
 ${jumper()}
 

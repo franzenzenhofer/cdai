@@ -161,6 +161,9 @@ The shell integration keeps native `cd` behavior first, including options such a
 `-P`, `cd -`, and zsh's `cd old new` substitution. If native `cd` cannot handle the arguments,
 cdai treats them as intent. Tab completion combines normal filesystem directories with cached
 indexed names; it never invokes AI, opens a picker, or crawls the filesystem.
+Documented controls such as `cdai doctor`, `cdai index --refresh`, and `cdai --version` always
+go directly to the executable. After upgrading, restart the shell (for example, `exec zsh`) to
+load the latest wrapper and completion definitions.
 
 On Apple Silicon with macOS 26+, `brew install apfel` adds a fast, private, on-device fallback.
 It needs Apple Intelligence enabled, but no API key or model download beyond Apple's system
@@ -208,7 +211,7 @@ removed from displayed reasons, and every failure falls back to deterministic su
 
 Set `ai.enabled` to `false` in `~/.config/cdai/config.json` and cdai is a fast fuzzy jumper with
 frecency and operators, nothing else. Tier 1 makes no network call, ever, under any
-configuration. All 130 tests pass with no AI backend on `PATH` at all - the tier 2 tests drive
+configuration. All 134 tests pass with no AI backend on `PATH` at all - the tier 2 tests drive
 executable shim scripts, so cloning this repo never spends a token.
 
 The chosen backend receives the words you typed, your cwd, and up to 50 in-root directory
@@ -245,9 +248,9 @@ cdai import zoxide        seed frecency from an existing zoxide database
 cdai doctor               show what cdai sees on this machine
 ```
 
-Exit codes: `0` a path was printed and the shell should cd, `3` handled but deliberately no cd
-(picker aborted, informational command), anything else is an error. stdout carries the resolved
-path and nothing else; every human readable byte goes to stderr.
+Exit codes: `0` success, `3` a navigation choice was deliberately aborted, anything else is an
+error. stdout carries the resolved path and nothing else; every human readable byte goes to
+stderr.
 
 ## Limitations
 
@@ -267,7 +270,7 @@ path and nothing else; every human readable byte goes to stderr.
 npm run typecheck && npm run lint && npm run test && npm run build
 ```
 
-130 tests, no mocking library, no fake filesystem. Fixtures are real temp trees containing
+134 tests, no mocking library, no fake filesystem. Fixtures are real temp trees containing
 spaces, unicode, symlinks, an unreadable directory and a `node_modules`. The AI tier is tested
 against real executable shim scripts. The shell integration is tested by running `zsh -f` and
 checking which directory it actually ended up in. Zero runtime dependencies; the build is a

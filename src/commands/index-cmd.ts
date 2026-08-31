@@ -15,7 +15,7 @@ export const runIndex = (args: readonly string[]): ExitCode => {
     const started = Date.now();
     const index = refreshIndex(config);
     note(`cdai: indexed ${index.entries.length} directories in ${Date.now() - started}ms`);
-    return EXIT.noCd;
+    return EXIT.ok;
   }
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE);
@@ -24,5 +24,5 @@ export const runIndex = (args: readonly string[]): ExitCode => {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);
   }
-  return EXIT.noCd;
+  return EXIT.ok;
 };

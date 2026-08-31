@@ -60,11 +60,11 @@ const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
   const command = args[0];
   if (command === undefined || command === '--help' || command === '-h') {
     note(USAGE);
-    return command === undefined ? EXIT.error : EXIT.noCd;
+    return command === undefined ? EXIT.error : EXIT.ok;
   }
   if (command === '--version' || command === '-v') {
     note(VERSION);
-    return EXIT.noCd;
+    return EXIT.ok;
   }
   if (command === 'init') return runInit(args[1]);
   if (command === 'setup') return runSetup(args.slice(1));

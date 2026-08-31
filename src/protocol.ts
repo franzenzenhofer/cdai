@@ -9,7 +9,7 @@ export const EXIT = {
   ok: 0,
   /** Something went wrong (no match, bad usage, unreadable config). */
   error: 1,
-  /** Handled, but deliberately no cd (user aborted the picker, doctor/setup output). */
+  /** A navigation request was handled but deliberately aborted, so the shell stays put. */
   noCd: 3,
 } as const;
 

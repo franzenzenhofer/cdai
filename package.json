@@ -1,6 +1,6 @@
 {
   "name": "cdai",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   "type": "module",
   "bin": {

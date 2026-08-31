@@ -10,7 +10,6 @@ import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');
-const EXIT_NO_CD = 3;
 const NOW = 1_800_000_000;
 
 let fixture: Fixture;
@@ -67,7 +66,7 @@ describe('cli surface', () => {
   it('runs setup non interactively and writes a config', () => {
     mkdirSync(join(fixture.rootDir, 'dev'), { recursive: true });
     const run = runCli('setup', '--yes');
-    expect(run.status).toBe(EXIT_NO_CD);
+    expect(run.status).toBe(0);
     expect(run.stdout).toBe('');
     expect(run.stderr).toContain('eval "$(cdai init zsh)"');
     const written: unknown = JSON.parse(readFileSync(join(fixture.configDir, 'config.json'), 'utf8'));
@@ -78,7 +77,7 @@ describe('cli surface', () => {
   it('reports the machine state in doctor', () => {
     writeConfig(fixture);
     const run = runCli('doctor');
-    expect(run.status).toBe(EXIT_NO_CD);
+    expect(run.status).toBe(0);
     expect(run.stderr).toContain('cdai doctor');
     expect(run.stderr).toContain('roots  2');
   });
@@ -91,7 +90,7 @@ describe('cli surface', () => {
 
   it('completes indexed directory names without human-facing output', () => {
     writeConfig(fixture);
-    expect(runCli('index', '--refresh').status).toBe(EXIT_NO_CD);
+    expect(runCli('index', '--refresh').status).toBe(0);
     const petal = runCli('complete', '--', 'pet');
     expect(petal).toEqual({ status: 0, stdout: 'petalworks\n', stderr: '' });
     expect(runCli('complete', '--', 'space').stdout).toBe('space dir with spaces\n');
@@ -104,6 +103,13 @@ describe('cli surface', () => {
     expect(bash.stdout).toContain('complete -o filenames -F __cdai_complete cdai');
     expect(syntax.status).toBe(0);
     expect(runCli('init', 'fish').stdout).toContain("complete -c cdai -a '(__cdai_complete)'");
+  });
+
+  it('reports help and version as successful CLI commands', () => {
+    expect(runCli('--help').status).toBe(0);
+    const version = runCli('--version');
+    expect(version.status).toBe(0);
+    expect(version.stderr.trim()).toBe('0.2.1');
   });
 
   it('honours the config dir override', () => {

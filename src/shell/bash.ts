@@ -1,4 +1,5 @@
 import { dataDir } from '../paths.js';
+import { CLI_CONTROL_PATTERN } from './control.js';
 import { shellQuote } from './quote.js';
 
 const recorder = (): string => `if [ -n "\${EPOCHSECONDS+x}" ]; then
@@ -17,14 +18,21 @@ case "$PROMPT_COMMAND" in
   *) PROMPT_COMMAND="__cdai_record\${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
 esac`;
 
+const runner = (): string => `__cdai_run() {
+  command \${CDAI_BIN:-cdai} "$@"
+}`;
+
 const jumper = (): string => `cdai() {
+  case "\${1-}" in
+    ${CLI_CONTROL_PATTERN}) __cdai_run "$@"; return $? ;;
+  esac
   if [ "$#" -gt 0 ] && [ "\${1#-}" != "$1" ]; then
     builtin cd "$@"
     return
   fi
   builtin cd -- "$@" 2>/dev/null && return
   local result
-  result="$(command \${CDAI_BIN:-cdai} query -- "$@")" || return $?
+  result="$(__cdai_run query -- "$@")" || return $?
   [ -n "$result" ] && builtin cd -- "$result"
 }`;
 
@@ -41,7 +49,7 @@ const completer = (): string => `__cdai_complete() {
   done < <(compgen -d -- "$current")
   while IFS= read -r candidate; do
     [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
-  done < <(command \${CDAI_BIN:-cdai} complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
+  done < <(__cdai_run complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
 }
 complete -o filenames -F __cdai_complete cdai`;
 
@@ -52,6 +60,8 @@ _CDAI_DATA="$CDAI_DATA_DIR"
 [ -d "$_CDAI_DATA" ] || mkdir -p "$_CDAI_DATA"
 
 ${recorder()}
+
+${runner()}
 
 ${jumper()}
 

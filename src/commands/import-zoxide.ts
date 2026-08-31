@@ -48,5 +48,5 @@ export const runImportZoxide = (): ExitCode => {
   }
   saveDb({ version: db.version, records: [...byPath.values()] });
   note(`cdai: imported ${imported.length} paths from zoxide`);
-  return EXIT.noCd;
+  return EXIT.ok;
 };

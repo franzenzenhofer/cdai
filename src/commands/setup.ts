@@ -59,5 +59,5 @@ export const runSetup = (args: readonly string[]): ExitCode => {
   note(`cdai: indexed ${index.entries.length} directories`);
   note('cdai: add this line to your shell config, then open a new shell');
   note(`      ${SHELL_LINES[currentShell()] ?? SHELL_LINES[DEFAULT_SHELL] ?? ''}`);
-  return EXIT.noCd;
+  return EXIT.ok;
 };

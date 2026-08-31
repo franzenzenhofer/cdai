@@ -47,5 +47,5 @@ export const runDoctor = (): ExitCode => {
   note(`visits ${mark(existsSync(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable('fzf') !== null)}`);
   note(`tty    ${mark(hasTty())}`);
-  return EXIT.noCd;
+  return EXIT.ok;
 };

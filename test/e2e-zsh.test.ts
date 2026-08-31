@@ -143,6 +143,22 @@ describe('cdai in a real zsh', () => {
     expect(run.stderr).toBe('');
   });
 
+  it('routes management commands to the executable without invoking AI', () => {
+    const run = runZsh(
+      withInit(
+        'cdai doctor; print "doctor=$?"; cdai index --refresh; print "index=$?"; cdai --version; print "version=$?"; pwd',
+      ),
+    );
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('doctor=0');
+    expect(run.stdout).toContain('index=0');
+    expect(run.stdout).toContain('version=0');
+    expect(run.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
+    expect(run.stderr).toContain('cdai doctor');
+    expect(run.stderr).toContain('0.2.1');
+    expect(run.stderr).not.toContain('thinking');
+  });
+
   it('sends a single dash back to the previous directory like cd does', () => {
     const run = runZsh(withInit(`cd ${fixture.projects}/squash; cd /tmp; cdai -; pwd`));
     expect(run.stdout.trim().endsWith(`${fixture.projects}/squash`)).toBe(true);

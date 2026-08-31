@@ -40,7 +40,7 @@ beforeEach(() => {
       CDAI_CONFIG_DIR: fixture.configDir,
       CDAI_DATA_DIR: fixture.dataDir,
     },
-  }).status).toBe(3);
+  }).status).toBe(0);
 });
 
 afterEach(() => {
