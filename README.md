@@ -6,8 +6,9 @@
 
 ## Install
 
-Requires Node.js 20+ on `PATH`. Your existing nvm, fnm, asdf, Volta or mise installation works;
-the formula deliberately reuses it and does **not** install a second Node runtime.
+Requires Node.js 20+. Homebrew reuses an active compatible Node on `PATH`, including one activated
+by nvm, fnm, asdf, Volta or mise. Otherwise it uses an already-installed Homebrew Node or installs
+one automatically.
 
 Homebrew is the recommended one-command install:
 
