@@ -4,6 +4,43 @@
 
 **Jump to the directory you mean—even if you have never visited it before.**
 
+## Install
+
+Homebrew is the recommended one-command install. It installs the required Node runtime too:
+
+```bash
+brew install franzenzenhofer/tap/cdai
+```
+
+Enable cdai in your shell:
+
+| Shell | Config file | Add this line |
+|---|---|---|
+| zsh | `~/.zshrc` | `eval "$(cdai init zsh)"` |
+| Bash | `~/.bashrc` | `eval "$(cdai init bash)"` |
+| Fish | `~/.config/fish/config.fish` | `cdai init fish \| source` |
+
+Then start a new shell and finish setup:
+
+```bash
+exec "$SHELL"
+cdai setup
+cdai doctor
+```
+
+Prefer npm? With Node.js 20+ installed:
+
+```bash
+npm install -g github:franzenzenhofer/cdai
+```
+
+Coming from zoxide? `cdai import zoxide` seeds the local frecency database. For explicit,
+non-interactive setup:
+
+```bash
+cdai setup --root "$HOME/dev" --depth 3 --yes --no-ai
+```
+
 `cdai` keeps normal `cd` behavior, adds a local directory index and frecency, understands intent
 such as `latest` or `2025`, and can use an optional AI fallback that is not allowed to invent a
 path. The fast path and every Tab completion are deterministic and model-free.
@@ -46,36 +83,6 @@ $ cdai that client with the flowers
 | Common intent | Handles `latest`, `oldest`, years and `in <root>` without AI |
 | Vague intent | Optionally asks an AI to choose from existing, pre-approved paths |
 | Runtime footprint | One bundled Node 20+ executable, zero runtime npm dependencies |
-
-## Install
-
-Requires Node.js 20+ and zsh, Bash or Fish on macOS or Linux.
-
-```bash
-npm install -g github:franzenzenhofer/cdai
-cdai setup
-```
-
-Add one line to your shell config, then start a new shell:
-
-| Shell | Config file | Add this line |
-|---|---|---|
-| zsh | `~/.zshrc` | `eval "$(cdai init zsh)"` |
-| Bash | `~/.bashrc` | `eval "$(cdai init bash)"` |
-| Fish | `~/.config/fish/config.fish` | `cdai init fish \| source` |
-
-```bash
-exec "$SHELL"
-cdai doctor
-```
-
-Coming from zoxide? `cdai import zoxide` seeds the local frecency database.
-
-For non-interactive setup, consent is deliberately explicit:
-
-```bash
-cdai setup --root "$HOME/dev" --depth 3 --yes --no-ai
-```
 
 ## Everyday usage
 
