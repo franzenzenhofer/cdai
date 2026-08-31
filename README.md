@@ -6,7 +6,10 @@
 
 ## Install
 
-Homebrew is the recommended one-command install. It installs the required Node runtime too:
+Requires Node.js 20+ on `PATH`. Your existing nvm, fnm, asdf, Volta or mise installation works;
+the formula deliberately reuses it and does **not** install a second Node runtime.
+
+Homebrew is the recommended one-command install:
 
 ```bash
 brew install franzenzenhofer/tap/cdai
