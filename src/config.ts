@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { absolutize, configFile, writeAtomic } from './paths.js';
+import { withStateLock } from './store/lock.js';
 
 export const DEFAULT_DEPTH = 2;
 export const MAX_DEPTH = 64;
@@ -106,5 +107,5 @@ export const loadConfig = (): Config => {
 };
 
 export const saveConfig = (config: Config): void => {
-  writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}\n`);
+  withStateLock(configFile(), () => writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}\n`));
 };

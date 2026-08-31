@@ -12,6 +12,7 @@ import type { DirIndex } from '../store/indexer.js';
 import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
 import { frecency } from '../store/frecency.js';
+import { PathChainSet } from './path-trie.js';
 
 export interface ResolveInput {
   readonly index: DirIndex;
@@ -26,21 +27,25 @@ export type Decision =
   | { readonly kind: 'unsure'; readonly candidates: readonly ScoredCandidate[] };
 
 export const frecencyMap = (db: Db, nowSeconds: number): Map<string, number> =>
-  new Map(db.records.map((record) => [record.path, frecency(record, nowSeconds)]));
+  new Map(db.records.map((record) => [record.realPath ?? record.path, frecency(record, nowSeconds)]));
 
 /** Index entries plus every remembered path, so visited dirs outside the roots stay reachable. */
 export const buildCandidates = (input: ResolveInput): Candidate[] => {
-  const byPath = new Map<string, Candidate>();
-  for (const entry of input.index.entries) byPath.set(entry.path, entry);
+  const byIdentity = new Map<string, Candidate>();
+  for (const entry of input.index.entries) byIdentity.set(entry.realPath, entry);
   for (const record of input.db.records) {
-    if (byPath.has(record.path)) continue;
-    byPath.set(record.path, { path: record.path, name: basename(record.path), mtime: 0, root: '' });
+    const identity = record.realPath ?? record.path;
+    if (byIdentity.has(identity)) continue;
+    byIdentity.set(identity, {
+      path: record.path,
+      name: basename(record.path),
+      mtime: 0,
+      root: '',
+      realPath: identity,
+    });
   }
-  return [...byPath.values()];
+  return [...byIdentity.values()];
 };
-
-const isChained = (a: string, b: string): boolean =>
-  a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 
 /**
  * A directory and its own ancestor are the same place, not two answers. Iterating score first
@@ -48,9 +53,11 @@ const isChained = (a: string, b: string): boolean =>
  */
 export const collapseChains = (ranked: readonly ScoredCandidate[]): ScoredCandidate[] => {
   const kept: ScoredCandidate[] = [];
+  const paths = new PathChainSet();
   for (const scored of ranked) {
-    if (kept.some((k) => isChained(k.candidate.path, scored.candidate.path))) continue;
+    if (paths.hasChain(scored.candidate.path)) continue;
     kept.push(scored);
+    paths.add(scored.candidate.path);
   }
   return kept;
 };
@@ -82,7 +89,8 @@ const pickByMtime = (candidates: readonly Candidate[], newest: boolean): Candida
 const orderPool = (ranked: readonly ScoredCandidate[], index: DirIndex): Candidate[] => {
   const best = ranked[0];
   if (best === undefined) return [];
-  const contenders = ranked.filter((r) => r.score >= best.score - THRESHOLD.gap);
+  const quality = best.quality ?? best.score;
+  const contenders = ranked.filter((r) => (r.quality ?? r.score) >= quality - THRESHOLD.gap);
   return contenders.flatMap((r) => childrenOf(index, r.candidate.path));
 };
 
@@ -106,15 +114,19 @@ export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
   const best = ranked[0];
   if (best === undefined) return { kind: 'unsure', candidates: [] };
   const runnerUp = ranked[1];
-  const gap = best.score - (runnerUp?.score ?? 0);
-  if (best.score >= THRESHOLD.hit && gap >= THRESHOLD.gap) {
+  const quality = best.quality ?? best.score;
+  const runnerQuality = runnerUp?.quality ?? runnerUp?.score ?? 0;
+  const gap = quality === runnerQuality
+    ? best.score - (runnerUp?.score ?? 0)
+    : quality - runnerQuality;
+  if (quality >= THRESHOLD.hit && gap >= THRESHOLD.gap) {
     return { kind: 'hit', path: best.candidate.path, score: best.score };
   }
-  const shortlist = ranked.filter((r) => r.score >= THRESHOLD.candidate).slice(0, LIMIT.picker);
+  const shortlist = ranked.filter((r) => (r.quality ?? r.score) >= THRESHOLD.candidate).slice(0, LIMIT.picker);
   if (shortlist.length >= THRESHOLD.minPickerCandidates) {
     return { kind: 'choose', candidates: shortlist };
   }
-  if (shortlist.length === 1 && best.score >= THRESHOLD.hit) {
+  if (shortlist.length === 1 && quality >= THRESHOLD.hit) {
     return { kind: 'hit', path: best.candidate.path, score: best.score };
   }
   return { kind: 'unsure', candidates: ranked.slice(0, LIMIT.aiFuzzy) };

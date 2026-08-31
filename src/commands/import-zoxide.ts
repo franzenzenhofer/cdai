@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolveExecutable } from '../executable.js';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
-import { loadDb, saveDb } from '../store/db.js';
+import { updateDb } from '../store/db.js';
 import { DAY_SECONDS, type VisitRecord } from '../store/frecency.js';
 
 const ZOXIDE = 'zoxide';
@@ -40,13 +40,14 @@ export const runImportZoxide = (): ExitCode => {
   }
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
   const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync(r.path));
-  const db = loadDb();
-  const byPath = new Map(db.records.map((record) => [record.path, record]));
-  for (const record of imported) {
-    if (byPath.has(record.path)) continue;
-    byPath.set(record.path, record);
-  }
-  saveDb({ version: db.version, records: [...byPath.values()] });
+  updateDb((db) => {
+    const byPath = new Map(db.records.map((record) => [record.path, record]));
+    for (const record of imported) {
+      if (byPath.has(record.path)) continue;
+      byPath.set(record.path, record);
+    }
+    return { ...db, records: [...byPath.values()] };
+  });
   note(`cdai: imported ${imported.length} paths from zoxide`);
   return EXIT.ok;
 };

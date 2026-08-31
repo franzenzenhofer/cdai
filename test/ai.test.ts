@@ -1,4 +1,4 @@
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -23,9 +23,25 @@ import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 const EXECUTABLE = 0o755;
 const SHIM_TIMEOUT_MS = 10_000;
 const FAST_TIMEOUT_MS = 300;
+const DESCENDANT_TIMEOUT_MS = 1000;
 const TIMEOUT_SLACK_MS = 5000;
 let fixture: Fixture;
 let shimDir = '';
+
+const processTerminated = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return true;
+  }
+  if (process.platform !== 'linux') return false;
+  try {
+    // Minimal containers may leave an already-killed orphan as a zombie until PID 1 reaps it.
+    return readFileSync(`/proc/${String(pid)}/stat`, 'utf8').split(' ')[2] === 'Z';
+  } catch {
+    return true;
+  }
+};
 
 /** A real executable on PATH, spawned as a real subprocess. Nothing here is mocked. */
 const writeShim = (body: string): string => {
@@ -214,6 +230,18 @@ describe('askAi against a real shim process', () => {
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), FAST_TIMEOUT_MS);
     expect(outcome.kind).toBe('none');
     expect(Date.now() - started).toBeLessThan(TIMEOUT_SLACK_MS);
+  });
+
+  it('terminates backend descendants when the timeout fires', async () => {
+    const pidFile = join(fixture.rootDir, 'descendant.pid');
+    const command = writeShim(`sleep 30 & echo $! > '${pidFile}'; wait`);
+    const started = Date.now();
+    const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), DESCENDANT_TIMEOUT_MS);
+    expect(outcome.kind).toBe('none');
+    expect(Date.now() - started).toBeLessThan(3000);
+    const pid = Number(readFileSync(pidFile, 'utf8').trim());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(processTerminated(pid)).toBe(true);
   });
 
   it('degrades when the backend exits non zero', async () => {

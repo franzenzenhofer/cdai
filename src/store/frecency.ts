@@ -17,6 +17,8 @@ export const AGING_DROP_BELOW = 1.0;
 
 export interface VisitRecord {
   readonly path: string;
+  /** Canonical identity deduplicates logical and physical spellings of the same directory. */
+  readonly realPath?: string;
   readonly visits: number;
   readonly lastVisit: number;
 }

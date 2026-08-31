@@ -79,7 +79,14 @@ export const tokenize = (input: string): ParsedQuery => {
   const { rest: afterIn, rootFilter } = takeRootFilter(words);
   const { rest: afterOrder, order } = takeOrder(afterIn);
   const years = afterOrder.filter(isYear);
-  const tokens = afterOrder.filter((word) => !isYear(word) && !STOPWORDS.has(word));
+  const searchable = afterOrder.filter((word) => !isYear(word));
+  const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
+  // A directory may literally be named "project" or "folder"; stopwords cannot erase intent.
+  const tokens = meaningful.length > 0 ? meaningful : searchable;
+  // An operator or year can also be a literal directory name when it is the entire query.
+  if (tokens.length === 0 && words.length > 0) {
+    return { raw: input, tokens: words, order: 'none', years: [], rootFilter: null };
+  }
   return { raw: input, tokens, order, years, rootFilter };
 };
 

@@ -1,4 +1,4 @@
-import { BONUS, FUZZY, SCORE } from './constants.js';
+import { BONUS, COMPLETION, FUZZY, SCORE } from './constants.js';
 import type { ParsedQuery } from './tokenize.js';
 
 const SEGMENT_SPLIT = /[^a-z0-9]+/;
@@ -9,6 +9,7 @@ export interface Candidate {
   readonly name: string;
   readonly mtime: number;
   readonly root: string;
+  readonly realPath?: string;
 }
 
 export interface ScoreContext {
@@ -19,6 +20,8 @@ export interface ScoreContext {
 export interface ScoredCandidate {
   readonly candidate: Candidate;
   readonly score: number;
+  /** Match class before contextual bonuses; stronger text matches always rank first. */
+  readonly quality?: number;
 }
 
 /** Longest run bonus for a subsequence match, 0 when the token is not a subsequence at all. */
@@ -41,6 +44,48 @@ export const fuzzyScore = (token: string, name: string): number => {
   return Math.round(SCORE.fuzzyMax * share);
 };
 
+interface EditInput {
+  readonly token: string;
+  readonly name: string;
+  readonly nameLength: number;
+}
+
+const withinEdits = (input: EditInput, row: number, column: number, left: number): boolean => {
+  while (row < input.token.length && column < input.nameLength
+    && input.token[row] === input.name[column]) {
+    row += 1;
+    column += 1;
+  }
+  const tokenLeft = input.token.length - row;
+  const nameLeft = input.nameLength - column;
+  if (tokenLeft === 0 || nameLeft === 0) return Math.max(tokenLeft, nameLeft) <= left;
+  if (left === 0 || Math.abs(tokenLeft - nameLeft) > left) return false;
+  if (row + 1 < input.token.length && column + 1 < input.nameLength
+    && input.token[row] === input.name[column + 1]
+    && input.token[row + 1] === input.name[column]
+    && withinEdits(input, row + 2, column + 2, left - 1)) return true;
+  return withinEdits(input, row + 1, column + 1, left - 1)
+    || withinEdits(input, row + 1, column, left - 1)
+    || withinEdits(input, row, column + 1, left - 1);
+};
+
+const hasPrefixWithin = (token: string, name: string, edits: number): boolean => {
+  const start = Math.max(1, token.length - edits);
+  const end = Math.min(name.length, token.length + edits);
+  for (let length = start; length <= end; length += 1) {
+    if (withinEdits({ token, name, nameLength: length }, 0, 0, edits)) return true;
+  }
+  return false;
+};
+
+const typoScore = (token: string, name: string): number => {
+  if (token.length < COMPLETION.minSmartLength || token.length > COMPLETION.maxTypoLength) return SCORE.none;
+  if (token[0] !== name[0]) return SCORE.none;
+  const allowance = token.length >= 8 ? 2 : 1;
+  if (hasPrefixWithin(token, name, 1)) return SCORE.fuzzyMax - 40;
+  return allowance === 2 && hasPrefixWithin(token, name, 2) ? SCORE.fuzzyMax - 80 : SCORE.none;
+};
+
 const hasBoundaryHit = (token: string, name: string): boolean =>
   name.split(SEGMENT_SPLIT).some((segment) => segment !== '' && segment.startsWith(token));
 
@@ -51,7 +96,8 @@ export const matchName = (token: string, name: string): number => {
   if (lower.startsWith(token)) return SCORE.prefix;
   if (hasBoundaryHit(token, lower)) return SCORE.wordBoundary;
   if (lower.includes(token)) return SCORE.substring;
-  return fuzzyScore(token, lower);
+  const fuzzy = fuzzyScore(token, lower);
+  return fuzzy > SCORE.none ? fuzzy : typoScore(token, lower);
 };
 
 const parentPath = (path: string): string => {
@@ -82,11 +128,7 @@ const passesFilters = (query: ParsedQuery, candidate: Candidate): boolean => {
 };
 
 /** Multi token AND: every token must match somewhere, the mean match class is the base score. */
-export const scoreCandidate = (
-  query: ParsedQuery,
-  candidate: Candidate,
-  context: ScoreContext,
-): number => {
+export const matchQuality = (query: ParsedQuery, candidate: Candidate): number => {
   if (!passesFilters(query, candidate)) return SCORE.none;
   if (query.tokens.length === 0) return SCORE.none;
   let sum = 0;
@@ -95,13 +137,31 @@ export const scoreCandidate = (
     if (single === SCORE.none) return SCORE.none;
     sum += single;
   }
-  const base = sum / query.tokens.length;
-  const frecency = context.frecencyByPath.get(candidate.path) ?? 0;
+  return sum / query.tokens.length;
+};
+
+export const scoreCandidate = (
+  query: ParsedQuery,
+  candidate: Candidate,
+  context: ScoreContext,
+): number => {
+  const quality = matchQuality(query, candidate);
+  if (quality === SCORE.none) return SCORE.none;
+  return contextualScore(query, candidate, context, quality);
+};
+
+const contextualScore = (
+  query: ParsedQuery,
+  candidate: Candidate,
+  context: ScoreContext,
+  quality: number,
+): number => {
+  const frecency = context.frecencyByPath.get(candidate.realPath ?? candidate.path) ?? 0;
   const underCwd =
     candidate.path !== context.cwd && candidate.path.startsWith(`${context.cwd}/`)
       ? BONUS.underCwd
       : 0;
-  return base + frecencyBonus(frecency) + underCwd + brevityBonus(query, candidate);
+  return quality + frecencyBonus(frecency) + underCwd + brevityBonus(query, candidate);
 };
 
 /**
@@ -125,6 +185,11 @@ export const rankCandidates = (
   context: ScoreContext,
 ): ScoredCandidate[] =>
   candidates
-    .map((candidate) => ({ candidate, score: scoreCandidate(query, candidate, context) }))
+    .map((candidate) => {
+      const quality = matchQuality(query, candidate);
+      return { candidate, quality, score: quality === SCORE.none
+        ? SCORE.none : contextualScore(query, candidate, context, quality) };
+    })
     .filter((scored) => scored.score > SCORE.none)
-    .sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
+    .sort((a, b) => b.quality - a.quality || b.score - a.score
+      || a.candidate.path.localeCompare(b.candidate.path));

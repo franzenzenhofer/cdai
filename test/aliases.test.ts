@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -52,5 +52,14 @@ describe('confirmed intent aliases', () => {
     expect(loadAliases().aliases).toEqual([]);
     rememberAlias('unsafe', 'relative', 1);
     expect(findAlias('unsafe')).toBeUndefined();
+  });
+
+  it('never overwrites a future alias schema', () => {
+    const file = join(fixture.dataDir, 'aliases.json');
+    const future = JSON.stringify({ version: 999, aliases: [] });
+    writeFileSync(file, future);
+    expect(() => loadAliases()).toThrow('unsupported alias schema');
+    expect(() => rememberAlias('new intent', fixture.clients, 1)).toThrow('unsupported alias schema');
+    expect(readFileSync(file, 'utf8')).toBe(future);
   });
 });

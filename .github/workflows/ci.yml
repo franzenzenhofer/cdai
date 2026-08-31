@@ -18,9 +18,28 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fish zsh
+        run: sudo apt-get update && sudo apt-get install -y expect fish zsh
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+      - run: git diff --exit-code -- dist/cdai.js
+
+  current-fish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y expect
+          curl -fsSL https://github.com/fish-shell/fish-shell/releases/download/4.8.1/fish-4.8.1-linux-x86_64.tar.xz -o /tmp/fish.tar.xz
+          sudo tar -xJf /tmp/fish.tar.xz -C /usr/local/bin
+          fish --version
+      - run: npm ci
+      - run: npm run build
+      - run: npx vitest run test/e2e-fish.test.ts
+      - run: npx vitest run test/e2e-completion-pty.test.ts -t Fish

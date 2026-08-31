@@ -47,7 +47,7 @@ class candidate. Frecency then reorders what the index found.
 |  | zoxide | cdai |
 |---|---|---|
 | frecency ranking | yes | yes, same aging formula |
-| learns from your shell | yes | yes, chpwd hook, zero subprocesses |
+| learns from your shell | yes | yes, prompt/PWD hook, no Node process on directory change |
 | indexes directories you have never visited | no | yes, configurable roots and depth |
 | `latest` / `oldest` / year / `in <root>` | no | yes, deterministic, no LLM |
 | natural language fallback | no | optional, one config flag to kill it |
@@ -102,7 +102,8 @@ directories**. Best of 10 runs, full process spawn to exit, `spawnSync` from a N
 
 So tier 1 costs about **30ms of actual work**; the rest is Node booting. Tier 2 costs seconds,
 which is exactly why the thresholds are tuned to avoid it. `test/latency.test.ts` fails the
-build if an exact hit ever crosses 150ms.
+build if the 10-run median crosses 150ms or p95 crosses 250ms for either an exact query or
+cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
@@ -118,7 +119,7 @@ Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
         └───────────┬───────────┘
                     ▼
         ┌───────────────────────┐        ┌──────────────────┐
-        │ tier 1: deterministic │◀───────│ index.json  dirs │  rebuilt on miss, TTL 60min
+        │ tier 1: deterministic │◀───────│ index.json  dirs │  config-aware, TTL 60min
         │ fuzzy + frecency      │◀───────│ db + aliases     │  visits + confirmed intent
         └───────────┬───────────┘        └──────────────────┘
                     │
@@ -164,16 +165,31 @@ exec zsh
 bash: `eval "$(cdai init bash)"` in `~/.bashrc`. fish: `cdai init fish | source` in
 `~/.config/fish/config.fish`. Coming from zoxide? `cdai import zoxide` seeds your frecency.
 
-The shell integration keeps native `cd` behavior first, including `cd -`, CDPATH, and zsh's
-`cd old new` substitution. In zsh and Bash, options such as `-L` and `-P` compose with indexed
-intent (`cdai -P petal`). Failed explicit paths containing `/` or starting with `~`, stack
+For automation or a machine without a terminal, consent is explicit:
+
+```bash
+cdai setup --root "$HOME/dev" --depth 3 --yes --no-ai
+```
+
+The shell integration keeps native `cd` behavior first, including `cd -`, directory history,
+CDPATH, and zsh's `cd old new` substitution. In zsh and Bash, options such as `-L` and `-P`
+compose with indexed intent (`cdai -P petal`). Current Fish supports `-L`/`--no-dereference`
+and `-P`/`--dereference`; cdai feature-detects those flags and composes them with intent while
+remaining compatible with older Fish. Failed explicit paths containing `/` or starting with `~`, stack
 syntax, and invalid options stay native-only instead of being guessed. Ordinary words fall back
-to cdai intent. Tab completion combines filesystem directories with cached indexed names,
-strips recognized flags, expands duplicate names to full paths, and never invokes AI, opens a
-picker, or crawls the filesystem.
-Documented controls such as `cdai doctor`, `cdai index --refresh`, and `cdai --version` always
-go directly to the executable. After upgrading, restart the shell (for example, `exec zsh`) to
-load the latest wrapper and completion definitions.
+to cdai intent. Tab completion combines filesystem and CDPATH directories with the cached index,
+visit frecency, cwd context, and confirmed local aliases. It understands compact forms (`gma` →
+`goalmap`), bounded typos, multi-word intent, years, `latest`/`oldest`, and `in <root>`. Multiple
+results are emitted only when they extend the active word; a non-prefix correction must be a
+single best match, so Tab never shortens the command to an unrelated common prefix. Duplicate
+destinations complete to their shared basename and cdai's picker disambiguates after Enter.
+Completion strips recognized flags and never invokes AI, opens a picker, ingests visits, or
+crawls the filesystem.
+Documented controls such as `cdai doctor`, `cdai index --refresh`, and `cdai --version` go
+directly to the executable. Native behavior still wins when a one-word control is an existing
+relative directory. After upgrading, restart the shell (for example, `exec zsh`) to load the
+latest wrapper and completion definitions. Cache format upgrades migrate automatically; changed
+root configuration is reported by `cdai doctor` with the exact refresh command.
 
 On Apple Silicon with macOS 26+, `brew install apfel` adds a fast, private, on-device fallback.
 It needs Apple Intelligence enabled, but no API key or model download beyond Apple's system
@@ -214,8 +230,9 @@ appended when `{prompt}` is absent:
 ```
 
 cdai understands bare model JSON and the response envelopes emitted by Apfel, Claude, Gemini,
-and OpenAI-compatible tools. Backend output is capped at 1 MiB, calls time out, control text is
-removed from displayed reasons, and every failure falls back to deterministic suggestions.
+and OpenAI-compatible tools. Backend output is capped at 1 MiB, calls time out and terminate
+the backend process group, control text is removed from displayed reasons, and every failure
+falls back to deterministic suggestions.
 Setup states which backend was selected and that vague queries plus candidate paths may be sent
 to it. Use `cdai setup --no-ai` during or after setup to opt out, and `--ai` to re-enable it.
 
@@ -245,10 +262,13 @@ their own privacy and billing policies.
 }
 ```
 
-Data lives in `~/.local/share/cdai/`: `index.json`, `db.json` (frecency), `aliases.json`
-(confirmed intent, capped at 256), and `visits.log` (append only, ingested on the next run, so
-the shell hook spawns no subprocess). The index carries a roots/depth/ignore fingerprint and is
-rebuilt automatically when that configuration changes.
+Data lives in `~/.local/share/cdai/`: `index.json` (capped at 50,000 entries and a five-second
+walk), `db.json` (frecency, capped at 10,000 paths), `aliases.json` (confirmed intent, capped at
+256), and `visits.log` (append only, ingested transactionally on the next navigation query).
+Config/state directories are mode `0700` and files `0600`; each invocation tightens permissions
+from older installs. The index carries a roots/depth/ignore fingerprint, reports partial crawls,
+and is rebuilt automatically when that configuration changes. Concurrent shells serialize
+short atomic updates so visits and aliases are not lost or double-counted.
 
 ## Commands
 
@@ -257,11 +277,16 @@ cdai [cd-options] <words> native cd first, then indexed/remembered/AI intent
 cdai <explicit/path>      native cd only; never fuzzy or AI-rerouted
 cdai query -- <words>     resolve only, prints the path on stdout
 cdai init <zsh|bash|fish> print the shell integration, meant for eval
-cdai setup [--yes] [--ai|--no-ai]
-                          detect roots and choose optional AI fallback
+cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]
+           [--remove-root <path>]
+                          detect or add roots and choose optional AI fallback
 cdai index [--refresh]    show or rebuild the directory index
 cdai import zoxide        seed frecency from an existing zoxide database
+cdai alias list           show confirmed local intent aliases
+cdai alias forget -- <words>
+                          forget a mistaken confirmed alias
 cdai doctor               show what cdai sees on this machine
+cdai --version
 ```
 
 Exit codes: `0` success, `3` a navigation choice was deliberately aborted, anything else is an
@@ -279,6 +304,8 @@ stderr.
 - **Tier 2 is seconds, not milliseconds**, and needs a working CLI backend. It is off the hot
   path by design, not by accident.
 - **No semantic search over unindexed directories.** See the section above.
+- **Newline-bearing directory names are not supported.** Shell query/completion output is
+  newline-delimited, so such paths are excluded instead of being emitted ambiguously.
 - **Small TypeScript codebase.** This is one focused tool, not a platform.
 
 ## Development
@@ -289,8 +316,10 @@ npm run typecheck && npm run lint && npm run test && npm run build
 
 No mocking library and no fake filesystem. Fixtures are real temp trees containing spaces,
 unicode, symlinks, an unreadable directory and a `node_modules`. The AI tier uses executable
-shim processes; zsh and Bash run end to end; fish runs in CI on Linux. Exact-hit latency remains
-a hard build gate. Zero runtime dependencies; the build is one bundled `dist/cdai.js`.
+shim processes; zsh, Bash, older Fish, and current Fish run end to end, with real PTY Tab tests
+for all three shells. Exact-query and cached-completion median/p95 latency remain hard build gates.
+The packed tarball is installed and executed in the suite. Zero runtime dependencies; the build
+is one bundled `dist/cdai.js`.
 
 ## Prior art
 

@@ -11,19 +11,17 @@ Type "source /tmp/cdai-demo/setup.zsh"
 Enter
 Show
 Sleep 800ms
-Type "cdai petal"
+Type "cdai pet"
 Sleep 600ms
+Tab
+Sleep 900ms
 Enter
 Sleep 1800ms
-Type "cdai latest petalworks folder"
+Type "cdai -P latest petalworks folder"
 Sleep 600ms
 Enter
 Sleep 2200ms
-Type "cdai tictac"
+Type "cdai flowers client"
 Sleep 600ms
-Enter
-Sleep 1600ms
-Type "3d"
-Sleep 900ms
 Enter
 Sleep 2500ms

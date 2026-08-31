@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
@@ -108,6 +108,7 @@ describe('cdai in a real zsh', () => {
     expect(existsSync(log)).toBe(true);
     const lines = readFileSync(log, 'utf8').trim().split('\n');
     expect(lines[lines.length - 1]).toMatch(new RegExp(`^\\d+\t${fixture.clients}/petalworks$`));
+    expect(statSync(log).mode & 0o077).toBe(0);
   });
 
   it('feeds those visits back into the ranking', () => {
@@ -152,6 +153,13 @@ describe('cdai in a real zsh', () => {
     const flag = runZsh(withInit('cdai -Z petal; print "exit=$?"'));
     expect(flag.stdout.trim()).toBe(`exit=${EXIT_ERROR}`);
     expect(flag.stderr).not.toContain('thinking');
+    const late = runZsh(withInit('cdai petal -P; print "exit=$?"; pwd'));
+    expect(late.stdout).toContain(`exit=${EXIT_ERROR}`);
+    expect(late.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
+    const secondPath = runZsh(withInit('cdai old new/path; print "exit=$?"'));
+    expect(secondPath.stdout).toContain(`exit=${EXIT_ERROR}`);
+    expect(secondPath.stderr).not.toContain('no match');
+    expect(path.stderr).not.toMatch(/cdai:cd:\d+/);
   });
 
   it('preserves zsh native old-new directory substitution', () => {
@@ -174,8 +182,22 @@ describe('cdai in a real zsh', () => {
     expect(run.stdout).toContain('version=0');
     expect(run.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
     expect(run.stderr).toContain('cdai doctor');
-    expect(run.stderr).toContain('0.3.0');
+    expect(run.stderr).toContain('0.3.1');
     expect(run.stderr).not.toContain('thinking');
+  });
+
+  it('lets an existing reserved-name directory win natively', () => {
+    mkdirSync(join(fixture.projects, 'doctor'));
+    const run = runZsh(withInit(`cd ${fixture.projects}; cdai doctor; pwd`));
+    expect(run.stdout.trim()).toBe(join(fixture.projects, 'doctor'));
+    expect(run.stderr).toBe('');
+  });
+
+  it('deduplicates physical visits against a logical indexed path', () => {
+    const run = runZsh(withInit(`cdai -P petal; cd ${fixture.rootDir}; cdai petal; pwd`));
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe(join(fixture.clients, 'petalworks'));
+    expect(run.stderr).not.toContain('several matches');
   });
 
   it('sends a single dash back to the previous directory like cd does', () => {

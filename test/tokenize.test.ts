@@ -8,6 +8,17 @@ describe('tokenize', () => {
     expect(parsed.order).toBe('none');
   });
 
+  it('preserves stopwords when they are the only possible directory name', () => {
+    expect(tokenize('project').tokens).toEqual(['project']);
+    expect(tokenize('the folder').tokens).toEqual(['the', 'folder']);
+  });
+
+  it('preserves a lone operator or year as a literal directory name', () => {
+    expect(tokenize('latest')).toMatchObject({ tokens: ['latest'], order: 'none', years: [] });
+    expect(tokenize('oldest')).toMatchObject({ tokens: ['oldest'], order: 'none', years: [] });
+    expect(tokenize('2025')).toMatchObject({ tokens: ['2025'], order: 'none', years: [] });
+  });
+
   it('recognises the latest operator', () => {
     const parsed = tokenize('latest petalworks folder');
     expect(parsed.order).toBe('latest');

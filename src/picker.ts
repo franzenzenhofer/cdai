@@ -54,11 +54,11 @@ const pickNumbered = (items: readonly PickerItem[]): string | null => {
   return items[choice - 1]?.path ?? null;
 };
 
-/** Yes/no on the terminal. Without a terminal the answer is yes, since only the shell calls us. */
+/** Yes/no on the terminal. Consent always fails closed when nobody can answer. */
 export const confirm = (question: string): boolean => {
   if (!hasTty()) {
-    note(`${question} [no terminal, accepted]`);
-    return true;
+    note(`${question} [no terminal, declined]`);
+    return false;
   }
   process.stderr.write(`${question} [Y/n] `);
   const answer = readLineFromTty().toLowerCase();

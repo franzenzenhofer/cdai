@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { backendLabel, resolveAiBackend } from '../ai/backend.js';
 import { configExists, loadConfig, type AiConfig, type Config } from '../config.js';
 import { resolveExecutable } from '../executable.js';
-import { aliasesFile, configFile, contractTilde, dataDir, dbFile, indexFile, visitsLog } from '../paths.js';
+import { aliasesFile, configDir, configFile, contractTilde, dataDir, dbFile, hasPrivateMode, indexFile, visitsLog } from '../paths.js';
 import { hasTty } from '../picker.js';
 import { EXIT, note, type ExitCode } from '../protocol.js';
 import { loadDb } from '../store/db.js';
@@ -30,7 +30,26 @@ const reportRoots = (config: Config): void => {
   reportAi(config.ai);
 };
 
-export const runDoctor = (): ExitCode => {
+const doctorArgs = (args: readonly string[]): ExitCode | null => {
+  if (args.length === 0) return null;
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    note('usage: cdai doctor');
+    return EXIT.ok;
+  }
+  note('cdai: usage: cdai doctor');
+  return EXIT.error;
+};
+
+const stateIsPrivate = (): boolean =>
+  hasPrivateMode(configDir(), true) &&
+  hasPrivateMode(dataDir(), true) &&
+  [configFile(), indexFile(), dbFile(), aliasesFile(), visitsLog()]
+    .filter(existsSync)
+    .every((path) => hasPrivateMode(path, false));
+
+export const runDoctor = (args: readonly string[] = []): ExitCode => {
+  const handled = doctorArgs(args);
+  if (handled !== null) return handled;
   note('cdai doctor');
   note(`node   ${process.version}`);
   note(`config ${mark(configExists())} ${configFile()}`);
@@ -43,12 +62,16 @@ export const runDoctor = (): ExitCode => {
   reportRoots(config);
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE);
-  const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
-  note(`index  ${mark(existsSync(indexFile()))} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? ' (stale)' : ''}`);
+  const compatible = matchesConfig(index, config);
+  const stale = isStale(index, Date.now()) || !compatible;
+  const partial = index.truncated === null ? '' : ` (partial: ${index.truncated} limit)`;
+  note(`index  ${mark(existsSync(indexFile()) && compatible)} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? ' (stale)' : ''}${partial}`);
+  if (!compatible) note('       run `cdai index --refresh` to rebuild the cache');
   note(`db     ${mark(existsSync(dbFile()))} ${loadDb().records.length} remembered paths`);
   note(`alias  ${mark(existsSync(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
   note(`visits ${mark(existsSync(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable('fzf') !== null)}`);
   note(`tty    ${mark(hasTty())}`);
+  note(`privacy ${mark(stateIsPrivate())} private state permissions`);
   return EXIT.ok;
 };

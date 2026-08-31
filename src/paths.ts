@@ -1,10 +1,12 @@
 import { homedir } from 'node:os';
 import { join, isAbsolute, resolve, sep } from 'node:path';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 
 const APP_NAME = 'cdai';
 const TMP_SUFFIX = '.tmp';
-const FILE_MODE = 0o644;
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_MASK = 0o077;
 
 export const configDir = (): string => {
   const override = process.env['CDAI_CONFIG_DIR'];
@@ -47,14 +49,17 @@ export const absolutize = (input: string): string => {
 };
 
 export const ensureDir = (dir: string): void => {
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  tightenMode(dir, PRIVATE_DIR_MODE);
 };
 
 /** Atomic write: same-directory temp file plus rename, so readers never see a partial file. */
 export const writeAtomic = (file: string, contents: string): void => {
   ensureDir(dirname(file));
   const tmp = `${file}.${process.pid}${TMP_SUFFIX}`;
-  writeFileSync(tmp, contents, { encoding: 'utf8', mode: FILE_MODE });
+  const mode = privateMode(file, PRIVATE_FILE_MODE);
+  writeFileSync(tmp, contents, { encoding: 'utf8', mode });
+  chmodSync(tmp, mode);
   renameSync(tmp, file);
 };
 
@@ -67,4 +72,51 @@ export const isUnder = (child: string, parent: string): boolean => {
   const c = resolve(child);
   const p = resolve(parent);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
+};
+
+/** Newline-delimited shell output cannot represent paths containing a line break. */
+export const isProtocolSafePath = (path: string): boolean => !/[\r\n]/u.test(path);
+
+const privateMode = (path: string, fallback: number): number => {
+  try {
+    const current = statSync(path).mode & 0o777;
+    const privateCurrent = current & ~PRIVATE_MASK;
+    return privateCurrent === 0 ? fallback : privateCurrent;
+  } catch {
+    return fallback;
+  }
+};
+
+const tightenMode = (path: string, fallback: number): void => {
+  try {
+    if (lstatSync(path).isSymbolicLink()) return;
+    chmodSync(path, privateMode(path, fallback));
+  } catch {
+    // Diagnostics report paths that cannot be secured; normal commands still degrade safely.
+  }
+};
+
+/** Tightens legacy installs on every invocation without creating any missing state. */
+export const secureExistingState = (): void => {
+  const dirs = [configDir(), dataDir()];
+  let claims: string[] = [];
+  try {
+    claims = readdirSync(dataDir())
+      .filter((name) => name.startsWith('visits.log.ingest.'))
+      .map((name) => join(dataDir(), name));
+  } catch {
+    // A missing data directory is normal before first setup.
+  }
+  const files = [configFile(), dbFile(), indexFile(), aliasesFile(), visitsLog(), ...claims];
+  dirs.filter(existsSync).forEach((path) => tightenMode(path, PRIVATE_DIR_MODE));
+  files.filter(existsSync).forEach((path) => tightenMode(path, PRIVATE_FILE_MODE));
+};
+
+export const hasPrivateMode = (path: string, directory: boolean): boolean => {
+  try {
+    const expected = directory ? PRIVATE_DIR_MODE : PRIVATE_FILE_MODE;
+    return (statSync(path).mode & PRIVATE_MASK) === 0 && (statSync(path).mode & expected) !== 0;
+  } catch {
+    return false;
+  }
 };

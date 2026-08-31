@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { tryReadJson } from '../json.js';
-import { aliasesFile, writeAtomic } from '../paths.js';
+import { aliasesFile, isProtocolSafePath, writeAtomic } from '../paths.js';
+import { withStateLock } from './lock.js';
 
 const ALIAS_VERSION = 1;
 export const MAX_ALIASES = 256;
@@ -28,7 +29,7 @@ const readAlias = (value: unknown): IntentAlias | undefined => {
   if (!isRecord(value)) return undefined;
   const { query, path, updatedAt } = value;
   if (typeof query !== 'string' || query === '' || query.length > MAX_QUERY_LENGTH) return undefined;
-  if (typeof path !== 'string' || !isAbsolute(path)) return undefined;
+  if (typeof path !== 'string' || !isAbsolute(path) || !isProtocolSafePath(path)) return undefined;
   if (typeof updatedAt !== 'number' || !Number.isSafeInteger(updatedAt) || updatedAt < 0) return undefined;
   return { query, path, updatedAt };
 };
@@ -39,6 +40,9 @@ export const loadAliases = (): AliasDb => {
   const file = aliasesFile();
   if (!existsSync(file)) return emptyAliases();
   const parsed = tryReadJson(file);
+  if (isRecord(parsed) && typeof parsed['version'] === 'number' && parsed['version'] !== ALIAS_VERSION) {
+    throw new Error(`unsupported alias schema version ${String(parsed['version'])}; state was not modified`);
+  }
   if (!isRecord(parsed) || parsed['version'] !== ALIAS_VERSION || !Array.isArray(parsed['aliases'])) {
     return emptyAliases();
   }
@@ -49,7 +53,7 @@ export const loadAliases = (): AliasDb => {
   return { version: ALIAS_VERSION, aliases };
 };
 
-const saveAliases = (aliases: readonly IntentAlias[]): void => {
+const saveAliasesUnlocked = (aliases: readonly IntentAlias[]): void => {
   writeAtomic(aliasesFile(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}\n`);
 };
 
@@ -61,14 +65,20 @@ export const findAlias = (query: string): IntentAlias | undefined => {
 
 export const rememberAlias = (query: string, path: string, updatedAt: number): void => {
   const normalized = normalizeIntent(query);
-  if (normalized === '' || normalized.length > MAX_QUERY_LENGTH || !isAbsolute(path)) return;
-  const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
-  saveAliases([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
+  if (normalized === '' || normalized.length > MAX_QUERY_LENGTH || !isAbsolute(path) || !isProtocolSafePath(path)) return;
+  withStateLock(aliasesFile(), () => {
+    const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
+    saveAliasesUnlocked([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
+  });
 };
 
-export const forgetAlias = (query: string): void => {
+export const forgetAlias = (query: string): boolean => {
   const normalized = normalizeIntent(query);
-  const db = loadAliases();
-  const kept = db.aliases.filter((alias) => alias.query !== normalized);
-  if (kept.length !== db.aliases.length) saveAliases(kept);
+  return withStateLock(aliasesFile(), () => {
+    const db = loadAliases();
+    const kept = db.aliases.filter((alias) => alias.query !== normalized);
+    if (kept.length === db.aliases.length) return false;
+    saveAliasesUnlocked(kept);
+    return true;
+  });
 };

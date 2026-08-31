@@ -1,30 +1,411 @@
 #!/usr/bin/env node
 
+// src/paths.ts
+import { homedir } from "node:os";
+import { join, isAbsolute, resolve, sep } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+var APP_NAME = "cdai";
+var TMP_SUFFIX = ".tmp";
+var PRIVATE_FILE_MODE = 384;
+var PRIVATE_DIR_MODE = 448;
+var PRIVATE_MASK = 63;
+var configDir = () => {
+  const override = process.env["CDAI_CONFIG_DIR"];
+  if (override !== void 0 && override !== "") return resolve(expandTilde(override));
+  const xdg = process.env["XDG_CONFIG_HOME"];
+  if (xdg !== void 0 && xdg !== "") return join(xdg, APP_NAME);
+  return join(homedir(), ".config", APP_NAME);
+};
+var dataDir = () => {
+  const override = process.env["CDAI_DATA_DIR"];
+  if (override !== void 0 && override !== "") return resolve(expandTilde(override));
+  const xdg = process.env["XDG_DATA_HOME"];
+  if (xdg !== void 0 && xdg !== "") return join(xdg, APP_NAME);
+  return join(homedir(), ".local", "share", APP_NAME);
+};
+var configFile = () => join(configDir(), "config.json");
+var dbFile = () => join(dataDir(), "db.json");
+var indexFile = () => join(dataDir(), "index.json");
+var aliasesFile = () => join(dataDir(), "aliases.json");
+var visitsLog = () => join(dataDir(), "visits.log");
+var expandTilde = (input) => {
+  if (input === "~") return homedir();
+  if (input.startsWith(`~${sep}`)) return join(homedir(), input.slice(2));
+  return input;
+};
+var contractTilde = (input) => {
+  const home = homedir();
+  if (input === home) return "~";
+  if (input.startsWith(home + sep)) return `~${sep}${input.slice(home.length + 1)}`;
+  return input;
+};
+var absolutize = (input) => {
+  const expanded = expandTilde(input);
+  return isAbsolute(expanded) ? resolve(expanded) : resolve(process.cwd(), expanded);
+};
+var ensureDir = (dir) => {
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  tightenMode(dir, PRIVATE_DIR_MODE);
+};
+var writeAtomic = (file, contents) => {
+  ensureDir(dirname(file));
+  const tmp = `${file}.${process.pid}${TMP_SUFFIX}`;
+  const mode = privateMode(file, PRIVATE_FILE_MODE);
+  writeFileSync(tmp, contents, { encoding: "utf8", mode });
+  chmodSync(tmp, mode);
+  renameSync(tmp, file);
+};
+var dirname = (file) => {
+  const idx = file.lastIndexOf(sep);
+  return idx <= 0 ? sep : file.slice(0, idx);
+};
+var isUnder = (child, parent) => {
+  const c = resolve(child);
+  const p = resolve(parent);
+  return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
+};
+var isProtocolSafePath = (path) => !/[\r\n]/u.test(path);
+var privateMode = (path, fallback) => {
+  try {
+    const current = statSync(path).mode & 511;
+    const privateCurrent = current & ~PRIVATE_MASK;
+    return privateCurrent === 0 ? fallback : privateCurrent;
+  } catch {
+    return fallback;
+  }
+};
+var tightenMode = (path, fallback) => {
+  try {
+    if (lstatSync(path).isSymbolicLink()) return;
+    chmodSync(path, privateMode(path, fallback));
+  } catch {
+  }
+};
+var secureExistingState = () => {
+  const dirs = [configDir(), dataDir()];
+  let claims = [];
+  try {
+    claims = readdirSync(dataDir()).filter((name) => name.startsWith("visits.log.ingest.")).map((name) => join(dataDir(), name));
+  } catch {
+  }
+  const files = [configFile(), dbFile(), indexFile(), aliasesFile(), visitsLog(), ...claims];
+  dirs.filter(existsSync).forEach((path) => tightenMode(path, PRIVATE_DIR_MODE));
+  files.filter(existsSync).forEach((path) => tightenMode(path, PRIVATE_FILE_MODE));
+};
+var hasPrivateMode = (path, directory) => {
+  try {
+    const expected = directory ? PRIVATE_DIR_MODE : PRIVATE_FILE_MODE;
+    return (statSync(path).mode & PRIVATE_MASK) === 0 && (statSync(path).mode & expected) !== 0;
+  } catch {
+    return false;
+  }
+};
+
+// src/protocol.ts
+var EXIT = {
+  /** A path was printed on stdout, the shell function should cd to it. */
+  ok: 0,
+  /** Something went wrong (no match, bad usage, unreadable config). */
+  error: 1,
+  /** A navigation request was handled but deliberately aborted, so the shell stays put. */
+  noCd: 3
+};
+var emitPath = (path) => {
+  process.stdout.write(`${path}
+`);
+};
+var note = (message) => {
+  process.stderr.write(`${message}
+`);
+};
+var jump = (path) => {
+  note(`\u2192 ${contractTilde(path)}`);
+  emitPath(path);
+};
+var fail = (message, hint) => {
+  note(`cdai: ${message}`);
+  if (hint !== void 0) note(`      ${hint}`);
+};
+
+// src/store/aliases.ts
+import { existsSync as existsSync3 } from "node:fs";
+import { isAbsolute as isAbsolute2 } from "node:path";
+
+// src/json.ts
+import { readFileSync } from "node:fs";
+var tryReadJson = (file) => {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+};
+
+// src/store/lock.ts
+import {
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync2,
+  renameSync as renameSync2,
+  rmSync,
+  statSync as statSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { dirname as dirname2 } from "node:path";
+var LOCK_WAIT_MS = 5;
+var LOCK_TIMEOUT_MS = 5e3;
+var INVALID_LOCK_GRACE_MS = 3e4;
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var parseLockOwner = (value) => {
+  if (!isRecord(value)) return null;
+  const { pid, token, createdAt } = value;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  if (typeof token !== "string" || token === "") return null;
+  if (!Number.isSafeInteger(createdAt) || createdAt < 0) return null;
+  return { pid, token, createdAt };
+};
+var readOwner = (ownerFile) => {
+  try {
+    return parseLockOwner(JSON.parse(readFileSync2(ownerFile, "utf8")));
+  } catch {
+    return null;
+  }
+};
+var processIsAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
+  }
+};
+var ageOf = (path, now) => {
+  try {
+    return Math.max(0, now - statSync2(path).mtimeMs);
+  } catch {
+    return 0;
+  }
+};
+var canReclaim = (lockDir, ownerFile, now) => {
+  const owner = readOwner(ownerFile);
+  if (owner !== null) return !processIsAlive(owner.pid);
+  return ageOf(lockDir, now) > INVALID_LOCK_GRACE_MS;
+};
+var pause = () => {
+  const signal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(signal, 0, 0, LOCK_WAIT_MS);
+};
+var isAlreadyExists = (error) => error instanceof Error && "code" in error && error.code === "EEXIST";
+var isMissing = (error) => error instanceof Error && "code" in error && error.code === "ENOENT";
+var quarantine = (lockDir) => {
+  const retired = `${lockDir}.trash.${process.pid}.${randomUUID()}`;
+  try {
+    renameSync2(lockDir, retired);
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+  rmSync(retired, { recursive: true, force: true });
+  return true;
+};
+var claimMarker = (marker) => {
+  const claimant = { pid: process.pid, token: randomUUID(), createdAt: Date.now() };
+  while (true) {
+    try {
+      writeFileSync2(marker, JSON.stringify(claimant), { encoding: "utf8", mode: 384, flag: "wx" });
+      return claimant;
+    } catch (error) {
+      if (isMissing(error)) return null;
+      if (!isAlreadyExists(error)) throw error;
+      const holder = readOwner(marker);
+      if (holder !== null && processIsAlive(holder.pid)) return null;
+      const retired = `${marker}.trash.${process.pid}.${randomUUID()}`;
+      try {
+        renameSync2(marker, retired);
+        rmSync(retired, { force: true });
+      } catch (renameError) {
+        if (!isMissing(renameError)) throw renameError;
+      }
+    }
+  }
+};
+var tryReclaim = (lockDir, ownerFile, now) => {
+  const marker = `${lockDir}/reclaim`;
+  const claimant = claimMarker(marker);
+  if (claimant === null) return false;
+  if (readOwner(marker)?.token === claimant.token && canReclaim(lockDir, ownerFile, now)) {
+    return quarantine(lockDir);
+  }
+  if (readOwner(marker)?.token === claimant.token) rmSync(marker, { force: true });
+  return false;
+};
+var release = (lockDir, ownerFile, token) => {
+  if (readOwner(ownerFile)?.token !== token) return;
+  quarantine(lockDir);
+};
+var acquire = (context) => {
+  const { stateFile, lockDir, ownerFile, started, owner } = context;
+  while (true) {
+    try {
+      mkdirSync2(lockDir, { mode: 448 });
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+      if (!existsSync2(lockDir)) continue;
+      if (canReclaim(lockDir, ownerFile, Date.now())) tryReclaim(lockDir, ownerFile, Date.now());
+      if (Date.now() - started >= LOCK_TIMEOUT_MS) throw new Error(`state is busy: ${stateFile}`);
+      pause();
+      continue;
+    }
+    try {
+      writeFileSync2(ownerFile, JSON.stringify(owner), { encoding: "utf8", mode: 384 });
+      return;
+    } catch (error) {
+      quarantine(lockDir);
+      throw error;
+    }
+  }
+};
+var withStateLock = (stateFile, action) => {
+  const lockDir = `${stateFile}.lock`;
+  const ownerFile = `${lockDir}/owner.json`;
+  const started = Date.now();
+  const owner = { pid: process.pid, token: randomUUID(), createdAt: started };
+  ensureDir(dirname2(stateFile));
+  acquire({ stateFile, lockDir, ownerFile, started, owner });
+  try {
+    return action();
+  } finally {
+    release(lockDir, ownerFile, owner.token);
+  }
+};
+
+// src/store/aliases.ts
+var ALIAS_VERSION = 1;
+var MAX_ALIASES = 256;
+var MAX_QUERY_LENGTH = 512;
+var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/g, " ");
+var readAlias = (value) => {
+  if (!isRecord2(value)) return void 0;
+  const { query, path, updatedAt } = value;
+  if (typeof query !== "string" || query === "" || query.length > MAX_QUERY_LENGTH) return void 0;
+  if (typeof path !== "string" || !isAbsolute2(path) || !isProtocolSafePath(path)) return void 0;
+  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) return void 0;
+  return { query, path, updatedAt };
+};
+var emptyAliases = () => ({ version: ALIAS_VERSION, aliases: [] });
+var loadAliases = () => {
+  const file = aliasesFile();
+  if (!existsSync3(file)) return emptyAliases();
+  const parsed = tryReadJson(file);
+  if (isRecord2(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
+    throw new Error(`unsupported alias schema version ${String(parsed["version"])}; state was not modified`);
+  }
+  if (!isRecord2(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"])) {
+    return emptyAliases();
+  }
+  const aliases = parsed["aliases"].slice(0, MAX_ALIASES).map(readAlias).filter((a) => a !== void 0);
+  return { version: ALIAS_VERSION, aliases };
+};
+var saveAliasesUnlocked = (aliases) => {
+  writeAtomic(aliasesFile(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
+`);
+};
+var findAlias = (query) => {
+  const normalized = normalizeIntent(query);
+  if (normalized === "") return void 0;
+  return loadAliases().aliases.find((alias) => alias.query === normalized);
+};
+var rememberAlias = (query, path, updatedAt) => {
+  const normalized = normalizeIntent(query);
+  if (normalized === "" || normalized.length > MAX_QUERY_LENGTH || !isAbsolute2(path) || !isProtocolSafePath(path)) return;
+  withStateLock(aliasesFile(), () => {
+    const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
+    saveAliasesUnlocked([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
+  });
+};
+var forgetAlias = (query) => {
+  const normalized = normalizeIntent(query);
+  return withStateLock(aliasesFile(), () => {
+    const db = loadAliases();
+    const kept = db.aliases.filter((alias) => alias.query !== normalized);
+    if (kept.length === db.aliases.length) return false;
+    saveAliasesUnlocked(kept);
+    return true;
+  });
+};
+
+// src/commands/alias.ts
+var ALIAS_USAGE = [
+  "usage:",
+  "  cdai alias list",
+  "  cdai alias forget -- <words>"
+].join("\n");
+var forget = (args) => {
+  if (args[0] === "--help" || args[0] === "-h") {
+    note(ALIAS_USAGE);
+    return EXIT.ok;
+  }
+  if (args[0]?.startsWith("-") === true && args[0] !== "--") {
+    fail(`unknown alias option: ${args[0]}`, ALIAS_USAGE);
+    return EXIT.error;
+  }
+  const words = args[0] === "--" ? args.slice(1) : args;
+  const query = words.join(" ").trim();
+  if (query === "") {
+    fail("missing intent to forget", ALIAS_USAGE);
+    return EXIT.error;
+  }
+  if (!forgetAlias(query)) {
+    fail(`no confirmed alias for "${query}"`);
+    return EXIT.error;
+  }
+  note(`cdai: forgot "${query}"`);
+  return EXIT.ok;
+};
+var runAlias = (args) => {
+  const command = args[0];
+  if (command === "--help" || command === "-h") {
+    note(ALIAS_USAGE);
+    return EXIT.ok;
+  }
+  if (command === "list" && args.length === 1) {
+    const aliases = loadAliases().aliases;
+    if (aliases.length === 0) note("cdai: no confirmed intent aliases");
+    aliases.forEach((alias) => note(`${alias.query} -> ${contractTilde(alias.path)}`));
+    return EXIT.ok;
+  }
+  if (command === "forget") return forget(args.slice(1));
+  fail("unknown alias command", ALIAS_USAGE);
+  return EXIT.error;
+};
+
 // src/commands/doctor.ts
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 
 // src/ai/backend.ts
 import { basename } from "node:path";
 
 // src/executable.ts
-import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
+import { accessSync, constants, statSync as statSync3 } from "node:fs";
+import { delimiter, isAbsolute as isAbsolute3, join as join2, resolve as resolve2, sep as sep2 } from "node:path";
 var isExecutableFile = (path) => {
   try {
     accessSync(path, constants.X_OK);
-    return statSync(path).isFile();
+    return statSync3(path).isFile();
   } catch {
     return false;
   }
 };
 var resolveExecutable = (command) => {
   if (command.trim() === "") return null;
-  if (isAbsolute(command) || command.includes(sep)) {
-    const path = resolve(command);
+  if (isAbsolute3(command) || command.includes(sep2)) {
+    const path = resolve2(command);
     return isExecutableFile(path) ? path : null;
   }
   for (const dir of (process.env["PATH"] ?? "").split(delimiter)) {
-    const candidate = join(dir === "" ? process.cwd() : dir, command);
+    const candidate = join2(dir === "" ? process.cwd() : dir, command);
     if (isExecutableFile(candidate)) return candidate;
   }
   return null;
@@ -106,69 +487,7 @@ var aiArgs = (backend2, prompt) => {
 var backendLabel = (backend2) => backend2.model === "" ? backend2.kind : `${backend2.kind} ${backend2.model}`;
 
 // src/config.ts
-import { readFileSync, existsSync } from "node:fs";
-
-// src/paths.ts
-import { homedir } from "node:os";
-import { join as join2, isAbsolute as isAbsolute2, resolve as resolve2, sep as sep2 } from "node:path";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-var APP_NAME = "cdai";
-var TMP_SUFFIX = ".tmp";
-var FILE_MODE = 420;
-var configDir = () => {
-  const override = process.env["CDAI_CONFIG_DIR"];
-  if (override !== void 0 && override !== "") return resolve2(expandTilde(override));
-  const xdg = process.env["XDG_CONFIG_HOME"];
-  if (xdg !== void 0 && xdg !== "") return join2(xdg, APP_NAME);
-  return join2(homedir(), ".config", APP_NAME);
-};
-var dataDir = () => {
-  const override = process.env["CDAI_DATA_DIR"];
-  if (override !== void 0 && override !== "") return resolve2(expandTilde(override));
-  const xdg = process.env["XDG_DATA_HOME"];
-  if (xdg !== void 0 && xdg !== "") return join2(xdg, APP_NAME);
-  return join2(homedir(), ".local", "share", APP_NAME);
-};
-var configFile = () => join2(configDir(), "config.json");
-var dbFile = () => join2(dataDir(), "db.json");
-var indexFile = () => join2(dataDir(), "index.json");
-var aliasesFile = () => join2(dataDir(), "aliases.json");
-var visitsLog = () => join2(dataDir(), "visits.log");
-var expandTilde = (input) => {
-  if (input === "~") return homedir();
-  if (input.startsWith(`~${sep2}`)) return join2(homedir(), input.slice(2));
-  return input;
-};
-var contractTilde = (input) => {
-  const home = homedir();
-  if (input === home) return "~";
-  if (input.startsWith(home + sep2)) return `~${sep2}${input.slice(home.length + 1)}`;
-  return input;
-};
-var absolutize = (input) => {
-  const expanded = expandTilde(input);
-  return isAbsolute2(expanded) ? resolve2(expanded) : resolve2(process.cwd(), expanded);
-};
-var ensureDir = (dir) => {
-  mkdirSync(dir, { recursive: true });
-};
-var writeAtomic = (file, contents) => {
-  ensureDir(dirname(file));
-  const tmp = `${file}.${process.pid}${TMP_SUFFIX}`;
-  writeFileSync(tmp, contents, { encoding: "utf8", mode: FILE_MODE });
-  renameSync(tmp, file);
-};
-var dirname = (file) => {
-  const idx = file.lastIndexOf(sep2);
-  return idx <= 0 ? sep2 : file.slice(0, idx);
-};
-var isUnder = (child, parent) => {
-  const c = resolve2(child);
-  const p = resolve2(parent);
-  return c === p || c.startsWith(p.endsWith(sep2) ? p : p + sep2);
-};
-
-// src/config.ts
+import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
 var DEFAULT_DEPTH = 2;
 var MAX_DEPTH = 64;
 var DEFAULT_IGNORE = [
@@ -191,22 +510,22 @@ var DEFAULT_AI = {
   timeoutMs: 45e3
 };
 var MAX_TIMER_MS = 2147483647;
-var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readRoots = (value) => {
   if (!Array.isArray(value)) return [];
   const roots = /* @__PURE__ */ new Map();
   for (const entry of value) {
-    const rawPath = typeof entry === "string" ? entry : isRecord(entry) ? entry["path"] : void 0;
+    const rawPath = typeof entry === "string" ? entry : isRecord3(entry) ? entry["path"] : void 0;
     if (typeof rawPath !== "string" || rawPath.trim() === "") continue;
-    const rawDepth = isRecord(entry) ? entry["depth"] : void 0;
-    const validDepth = typeof rawDepth === "number" && Number.isFinite(rawDepth) && rawDepth > 0 ? Math.min(MAX_DEPTH, Math.floor(rawDepth)) : DEFAULT_DEPTH;
+    const rawDepth = isRecord3(entry) ? entry["depth"] : void 0;
+    const validDepth2 = typeof rawDepth === "number" && Number.isFinite(rawDepth) && rawDepth > 0 ? Math.min(MAX_DEPTH, Math.floor(rawDepth)) : DEFAULT_DEPTH;
     const path = absolutize(rawPath);
-    roots.set(path, { path, depth: validDepth });
+    roots.set(path, { path, depth: validDepth2 });
   }
   return [...roots.values()];
 };
 var readAi = (value) => {
-  if (!isRecord(value)) return { ...DEFAULT_AI };
+  if (!isRecord3(value)) return { ...DEFAULT_AI };
   const args = value["args"];
   const command = value["command"];
   const timeoutMs = value["timeoutMs"];
@@ -220,13 +539,13 @@ var readAi = (value) => {
 };
 var readIgnore = (value) => Array.isArray(value) ? value.filter((v) => typeof v === "string") : [...DEFAULT_IGNORE];
 var emptyConfig = () => ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI } });
-var configExists = () => existsSync(configFile());
+var configExists = () => existsSync4(configFile());
 var loadConfig = () => {
   const file = configFile();
-  if (!existsSync(file)) return emptyConfig();
-  const raw = readFileSync(file, "utf8");
+  if (!existsSync4(file)) return emptyConfig();
+  const raw = readFileSync3(file, "utf8");
   const parsed = JSON.parse(raw);
-  if (!isRecord(parsed)) throw new Error(`config is not a JSON object: ${file}`);
+  if (!isRecord3(parsed)) throw new Error(`config is not a JSON object: ${file}`);
   return {
     roots: readRoots(parsed["roots"]),
     ignore: readIgnore(parsed["ignore"]),
@@ -234,46 +553,18 @@ var loadConfig = () => {
   };
 };
 var saveConfig = (config) => {
-  writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}
-`);
+  withStateLock(configFile(), () => writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}
+`));
 };
 
 // src/picker.ts
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync as existsSync2, openSync, readSync } from "node:fs";
-
-// src/protocol.ts
-var EXIT = {
-  /** A path was printed on stdout, the shell function should cd to it. */
-  ok: 0,
-  /** Something went wrong (no match, bad usage, unreadable config). */
-  error: 1,
-  /** A navigation request was handled but deliberately aborted, so the shell stays put. */
-  noCd: 3
-};
-var emitPath = (path) => {
-  process.stdout.write(`${path}
-`);
-};
-var note = (message) => {
-  process.stderr.write(`${message}
-`);
-};
-var jump = (path) => {
-  note(`\u2192 ${contractTilde(path)}`);
-  emitPath(path);
-};
-var fail = (message, hint) => {
-  note(`cdai: ${message}`);
-  if (hint !== void 0) note(`      ${hint}`);
-};
-
-// src/picker.ts
+import { closeSync, existsSync as existsSync5, openSync, readSync } from "node:fs";
 var TTY = "/dev/tty";
 var FZF = "fzf";
 var READ_BUFFER_BYTES = 256;
 var FZF_ARGS = ["--height=40%", "--reverse", "--prompt=cdai> "];
-var hasTty = () => existsSync2(TTY) && canOpenTty();
+var hasTty = () => existsSync5(TTY) && canOpenTty();
 var canOpenTty = () => {
   try {
     closeSync(openSync(TTY, "r"));
@@ -310,8 +601,8 @@ var pickNumbered = (items) => {
 };
 var confirm = (question) => {
   if (!hasTty()) {
-    note(`${question} [no terminal, accepted]`);
-    return true;
+    note(`${question} [no terminal, declined]`);
+    return false;
   }
   process.stderr.write(`${question} [Y/n] `);
   const answer = readLineFromTty().toLowerCase();
@@ -330,18 +621,7 @@ var pick = (items) => {
 };
 
 // src/store/db.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3, readdirSync, renameSync as renameSync2, rmSync } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join3 } from "node:path";
-
-// src/json.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-var tryReadJson = (file) => {
-  try {
-    return JSON.parse(readFileSync2(file, "utf8"));
-  } catch {
-    return void 0;
-  }
-};
+import { existsSync as existsSync7 } from "node:fs";
 
 // src/store/frecency.ts
 var HOUR_SECONDS = 3600;
@@ -367,33 +647,60 @@ var totalVisits = (records) => records.reduce((sum, r) => sum + r.visits, 0);
 var needsAging = (records) => totalVisits(records) > AGING_THRESHOLD;
 var applyAging = (records) => records.map((r) => ({ ...r, visits: r.visits * AGING_FACTOR })).filter((r) => r.visits >= AGING_DROP_BELOW);
 
-// src/store/db.ts
-var DB_VERSION = 1;
-var INGEST_PREFIX = "visits.log.ingest.";
-var FIELD_SEPARATOR = "	";
-var VISIT_INCREMENT = 1;
-var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+// src/store/db-records.ts
+import { realpathSync } from "node:fs";
+import { isAbsolute as isAbsolute4, resolve as resolve3 } from "node:path";
+var MAX_DB_RECORDS = 1e4;
+var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readVisitRecord = (value) => {
-  if (!isRecord2(value)) return void 0;
-  const { path, visits, lastVisit } = value;
-  if (typeof path !== "string" || !isAbsolute3(path)) return void 0;
+  if (!isRecord4(value)) return void 0;
+  const { path, realPath, visits, lastVisit } = value;
+  if (typeof path !== "string" || !isAbsolute4(path) || !isProtocolSafePath(path)) return void 0;
+  if (realPath !== void 0 && (typeof realPath !== "string" || !isAbsolute4(realPath) || !isProtocolSafePath(realPath))) return void 0;
   if (typeof visits !== "number" || !Number.isFinite(visits) || visits <= 0) return void 0;
   if (typeof lastVisit !== "number" || !Number.isFinite(lastVisit) || lastVisit < 0) return void 0;
-  return { path, visits, lastVisit };
+  const record = { path, visits, lastVisit };
+  return typeof realPath === "string" ? { ...record, realPath } : record;
 };
-var emptyDb = () => ({ version: DB_VERSION, records: [] });
-var loadDb = () => {
-  const file = dbFile();
-  if (!existsSync3(file)) return emptyDb();
-  const parsed = tryReadJson(file);
-  if (!isRecord2(parsed) || !Array.isArray(parsed["records"])) return emptyDb();
-  const records = parsed["records"].map(readVisitRecord).filter((r) => r !== void 0);
-  return { version: DB_VERSION, records };
+var canonicalPath = (path) => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve3(path);
+  }
 };
-var saveDb = (db) => {
-  writeAtomic(dbFile(), `${JSON.stringify({ version: DB_VERSION, records: db.records })}
-`);
+var boundedRecords = (records) => [...records].sort((a, b) => b.lastVisit - a.lastVisit || b.visits - a.visits || a.path.localeCompare(b.path)).slice(0, MAX_DB_RECORDS);
+var canonicalRecords = (records) => {
+  const byPath = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    const realPath = record.realPath ?? canonicalPath(record.path);
+    const existing = byPath.get(realPath);
+    byPath.set(realPath, {
+      path: existing?.path ?? record.path,
+      realPath,
+      visits: (existing?.visits ?? 0) + record.visits,
+      lastVisit: Math.max(existing?.lastVisit ?? 0, record.lastVisit)
+    });
+  }
+  return boundedRecords([...byPath.values()]);
 };
+
+// src/store/visit-claims.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import {
+  existsSync as existsSync6,
+  readFileSync as readFileSync4,
+  readdirSync as readdirSync2,
+  renameSync as renameSync3,
+  rmSync as rmSync2,
+  statSync as statSync4,
+  utimesSync
+} from "node:fs";
+import { basename as basename2, isAbsolute as isAbsolute5, join as join3 } from "node:path";
+var INGEST_PREFIX = "visits.log.ingest.";
+var FIELD_SEPARATOR = "	";
+var CLAIM_SETTLE_MS = 6e4;
+var MAX_CLAIMS = 1e4;
 var parseVisitLines = (contents) => {
   const visits = [];
   for (const line of contents.split("\n")) {
@@ -403,165 +710,294 @@ var parseVisitLines = (contents) => {
     const rawEpoch = line.slice(0, tab);
     const epoch = /^\d+$/.test(rawEpoch) ? Number(rawEpoch) : Number.NaN;
     const path = line.slice(tab + 1);
-    if (!Number.isSafeInteger(epoch) || epoch <= 0 || !isAbsolute3(path)) continue;
+    if (!Number.isSafeInteger(epoch) || epoch <= 0 || !isAbsolute5(path) || !isProtocolSafePath(path)) continue;
     visits.push({ path, epoch });
   }
   return visits;
 };
-var claimLogs = () => {
-  const dir = dataDir();
-  ensureDir(dir);
-  const live = visitsLog();
-  if (existsSync3(live)) {
-    const claimed = join3(dir, `${INGEST_PREFIX}${process.pid}.${Date.now()}`);
+var validClaimName = (name) => name.startsWith(INGEST_PREFIX) && basename2(name) === name;
+var readClaimOffsets = (value) => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([name, offset]) => validClaimName(name) && Number.isSafeInteger(offset) && offset >= 0).slice(0, MAX_CLAIMS));
+};
+var legacyClaimOffsets = (value) => {
+  if (!Array.isArray(value)) return {};
+  const offsets = {};
+  for (const name of value) {
+    if (typeof name !== "string" || !validClaimName(name)) continue;
     try {
-      renameSync2(live, claimed);
+      offsets[name] = statSync4(join3(dataDir(), name)).size;
     } catch {
-      return pendingLogs(dir);
+      offsets[name] = 0;
     }
   }
-  return pendingLogs(dir);
+  return offsets;
 };
-var pendingLogs = (dir) => readdirSync(dir).filter((name) => name.startsWith(INGEST_PREFIX)).map((name) => join3(dir, name));
+var pendingLogs = () => {
+  ensureDir(dataDir());
+  return readdirSync2(dataDir()).filter(validClaimName).map((name) => join3(dataDir(), name));
+};
+var claimLogs = () => {
+  const live = visitsLog();
+  if (existsSync6(live)) {
+    const claimed = join3(dataDir(), `${INGEST_PREFIX}${process.pid}.${Date.now()}.${randomUUID2()}`);
+    try {
+      renameSync3(live, claimed);
+      const now = /* @__PURE__ */ new Date();
+      utimesSync(claimed, now, now);
+    } catch {
+      return pendingLogs();
+    }
+  }
+  return pendingLogs();
+};
+var readClaimBatch = (logs, previous) => {
+  const visits = [];
+  const offsets = { ...previous };
+  const changed = /* @__PURE__ */ new Set();
+  for (const log of logs) {
+    const name = basename2(log);
+    const contents = readFileSync4(log);
+    const start = Math.min(previous[name] ?? 0, contents.length);
+    const newline = contents.lastIndexOf(10);
+    const end = newline < start ? start : newline + 1;
+    if (end > start) {
+      visits.push(...parseVisitLines(contents.toString("utf8", start, end)));
+      changed.add(name);
+    }
+    offsets[name] = end;
+  }
+  return { visits, offsets, changed };
+};
+var retireSettledClaims = (logs, batch, now = Date.now()) => {
+  const offsets = { ...batch.offsets };
+  for (const log of logs) {
+    const name = basename2(log);
+    try {
+      const stat = statSync4(log);
+      if (batch.changed.has(name) || batch.offsets[name] !== stat.size || now - stat.mtimeMs < CLAIM_SETTLE_MS) continue;
+      const retired = `${log}.trash.${process.pid}.${randomUUID2()}`;
+      renameSync3(log, retired);
+      rmSync2(retired, { force: true });
+      delete offsets[name];
+    } catch {
+    }
+  }
+  return offsets;
+};
+
+// src/store/db.ts
+var DB_VERSION = 3;
+var LEGACY_DB_VERSION = 1;
+var PREVIOUS_DB_VERSION = 2;
+var VISIT_INCREMENT = 1;
+var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var emptyDb = () => ({ version: DB_VERSION, records: [], claimOffsets: {} });
+var loadDbState = () => {
+  const file = dbFile();
+  if (!existsSync7(file)) return { db: emptyDb(), migrated: false };
+  const parsed = tryReadJson(file);
+  if (!isRecord5(parsed) || !Array.isArray(parsed["records"])) return { db: emptyDb(), migrated: false };
+  const version = parsed["version"];
+  if (version !== LEGACY_DB_VERSION && version !== PREVIOUS_DB_VERSION && version !== DB_VERSION) {
+    if (typeof version === "number") throw new Error(`unsupported db schema version ${String(version)}; state was not modified`);
+    return { db: emptyDb(), migrated: false };
+  }
+  const rawRecords = parsed["records"].map(readVisitRecord).filter((r) => r !== void 0);
+  const records = canonicalRecords(rawRecords);
+  return {
+    db: {
+      version: DB_VERSION,
+      records,
+      claimOffsets: version === DB_VERSION ? readClaimOffsets(parsed["claimOffsets"]) : legacyClaimOffsets(parsed["appliedClaims"])
+    },
+    migrated: version !== DB_VERSION || rawRecords.some((record) => record.realPath === void 0) || records.length !== rawRecords.length
+  };
+};
+var loadDb = () => loadDbState().db;
+var saveDbUnlocked = (db) => {
+  writeAtomic(
+    dbFile(),
+    `${JSON.stringify({
+      version: DB_VERSION,
+      records: canonicalRecords(db.records),
+      claimOffsets: db.claimOffsets
+    })}
+`
+  );
+};
 var mergeVisits = (db, visits) => {
-  const byPath = new Map(db.records.map((r) => [r.path, r]));
+  const byPath = new Map(canonicalRecords(db.records).map((r) => [r.realPath ?? r.path, r]));
+  const canonical3 = /* @__PURE__ */ new Map();
   for (const visit of visits) {
-    const existing = byPath.get(visit.path);
-    byPath.set(visit.path, {
-      path: visit.path,
+    let realPath = canonical3.get(visit.path);
+    if (realPath === void 0) {
+      realPath = canonicalPath(visit.path);
+      canonical3.set(visit.path, realPath);
+    }
+    const existing = byPath.get(realPath);
+    byPath.set(realPath, {
+      path: existing?.path ?? visit.path,
+      realPath,
       visits: (existing?.visits ?? 0) + VISIT_INCREMENT,
       lastVisit: Math.max(existing?.lastVisit ?? 0, visit.epoch)
     });
   }
-  const records = [...byPath.values()];
-  return { version: DB_VERSION, records: needsAging(records) ? applyAging(records) : records };
+  const records = boundedRecords([...byPath.values()]);
+  return {
+    version: DB_VERSION,
+    records: needsAging(records) ? applyAging(records) : records,
+    claimOffsets: db.claimOffsets
+  };
 };
-var ingest = () => {
+var ingestLocked = () => {
   const logs = claimLogs();
-  const db = loadDb();
-  if (logs.length === 0) return db;
-  const visits = [];
-  for (const log of logs) {
-    visits.push(...parseVisitLines(readFileSync3(log, "utf8")));
-    rmSync(log, { force: true });
+  const loaded = loadDbState();
+  let db = loaded.db;
+  if (logs.length === 0) {
+    if (loaded.migrated) saveDbUnlocked(db);
+    return db;
   }
-  if (visits.length === 0) return db;
-  const merged = mergeVisits(db, visits);
-  saveDb(merged);
-  return merged;
+  const batch = readClaimBatch(logs, db.claimOffsets);
+  const merged = mergeVisits(db, batch.visits);
+  db = { ...merged, claimOffsets: batch.offsets };
+  saveDbUnlocked(db);
+  const offsets = retireSettledClaims(logs, batch);
+  const cleaned = { ...db, claimOffsets: offsets };
+  if (Object.keys(offsets).length !== Object.keys(db.claimOffsets).length) saveDbUnlocked(cleaned);
+  return cleaned;
 };
+var ingest = () => withStateLock(dbFile(), ingestLocked);
+var updateDb = (update) => withStateLock(dbFile(), () => {
+  const next = update(ingestLocked());
+  saveDbUnlocked(next);
+  return next;
+});
 
-// src/store/aliases.ts
-import { existsSync as existsSync4 } from "node:fs";
-import { isAbsolute as isAbsolute4 } from "node:path";
-var ALIAS_VERSION = 1;
-var MAX_ALIASES = 256;
-var MAX_QUERY_LENGTH = 512;
-var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/g, " ");
-var readAlias = (value) => {
-  if (!isRecord3(value)) return void 0;
-  const { query, path, updatedAt } = value;
-  if (typeof query !== "string" || query === "" || query.length > MAX_QUERY_LENGTH) return void 0;
-  if (typeof path !== "string" || !isAbsolute4(path)) return void 0;
-  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) return void 0;
-  return { query, path, updatedAt };
+// src/store/indexer.ts
+import { existsSync as existsSync8, readdirSync as readdirSync3, realpathSync as realpathSync3, statSync as statSync5 } from "node:fs";
+import { basename as basename3, join as join4 } from "node:path";
+
+// src/store/index-schema.ts
+import { realpathSync as realpathSync2 } from "node:fs";
+import { isAbsolute as isAbsolute6 } from "node:path";
+var PREVIOUS_INDEX_VERSION = 2;
+var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var readStoredEntry = (value) => {
+  if (!isRecord6(value)) return void 0;
+  const { path, name, mtime, root, realPath } = value;
+  if (typeof path !== "string" || !isAbsolute6(path) || !isProtocolSafePath(path)) return void 0;
+  if (typeof name !== "string" || name === "" || !isProtocolSafePath(name)) return void 0;
+  if (typeof root !== "string" || !isAbsolute6(root)) return void 0;
+  if (typeof mtime !== "number" || !Number.isFinite(mtime) || mtime < 0) return void 0;
+  if (realPath !== void 0 && (typeof realPath !== "string" || !isAbsolute6(realPath) || !isProtocolSafePath(realPath))) return void 0;
+  const base = { path, name, mtime, root };
+  return realPath === void 0 ? base : { ...base, realPath };
 };
-var emptyAliases = () => ({ version: ALIAS_VERSION, aliases: [] });
-var loadAliases = () => {
-  const file = aliasesFile();
-  if (!existsSync4(file)) return emptyAliases();
-  const parsed = tryReadJson(file);
-  if (!isRecord3(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"])) {
-    return emptyAliases();
+var currentEntry = (value) => {
+  const entry = readStoredEntry(value);
+  return entry?.realPath === void 0 ? void 0 : { ...entry, realPath: entry.realPath };
+};
+var canonical = (path) => {
+  try {
+    return realpathSync2(path);
+  } catch {
+    return void 0;
   }
-  const aliases = parsed["aliases"].slice(0, MAX_ALIASES).map(readAlias).filter((a) => a !== void 0);
-  return { version: ALIAS_VERSION, aliases };
 };
-var saveAliases = (aliases) => {
-  writeAtomic(aliasesFile(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
-`);
+var previousEntry = (value, roots) => {
+  const entry = readStoredEntry(value);
+  if (entry === void 0) return void 0;
+  if (!roots.has(entry.root)) roots.set(entry.root, canonical(entry.root));
+  const realRoot = roots.get(entry.root);
+  const realPath = canonical(entry.path);
+  if (realRoot === void 0 || realPath === void 0 || !isUnder(realPath, realRoot)) return void 0;
+  return { ...entry, realPath };
 };
-var findAlias = (query) => {
-  const normalized = normalizeIntent(query);
-  if (normalized === "") return void 0;
-  return loadAliases().aliases.find((alias) => alias.query === normalized);
-};
-var rememberAlias = (query, path, updatedAt) => {
-  const normalized = normalizeIntent(query);
-  if (normalized === "" || normalized.length > MAX_QUERY_LENGTH || !isAbsolute4(path)) return;
-  const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
-  saveAliases([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
-};
-var forgetAlias = (query) => {
-  const normalized = normalizeIntent(query);
-  const db = loadAliases();
-  const kept = db.aliases.filter((alias) => alias.query !== normalized);
-  if (kept.length !== db.aliases.length) saveAliases(kept);
+var truncation = (value) => value === "entries" || value === "time" ? value : null;
+var parseIndex = (value, currentVersion) => {
+  if (!isRecord6(value) || !Array.isArray(value["entries"])) return void 0;
+  const version = value["version"];
+  if (version !== currentVersion && version !== PREVIOUS_INDEX_VERSION) return void 0;
+  const roots = /* @__PURE__ */ new Map();
+  const reader = version === currentVersion ? currentEntry : (entry) => previousEntry(entry, roots);
+  const generatedAt = value["generatedAt"];
+  const configKey = value["configKey"];
+  return {
+    index: {
+      version: currentVersion,
+      generatedAt: typeof generatedAt === "number" && Number.isFinite(generatedAt) && generatedAt >= 0 ? generatedAt : 0,
+      configKey: typeof configKey === "string" ? configKey : "",
+      truncated: truncation(value["truncated"]),
+      entries: value["entries"].map(reader).filter((entry) => entry !== void 0)
+    },
+    migrated: version !== currentVersion
+  };
 };
 
 // src/store/indexer.ts
-import { existsSync as existsSync5, readdirSync as readdirSync2, realpathSync, statSync as statSync2 } from "node:fs";
-import { basename as basename2, isAbsolute as isAbsolute5, join as join4 } from "node:path";
-var INDEX_VERSION = 2;
+var INDEX_VERSION = 3;
 var INDEX_TTL_MS = 60 * 60 * 1e3;
 var MAX_ENTRIES = 5e4;
 var MAX_WALK_MS = 5e3;
 var HIDDEN_PREFIX = ".";
-var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var readEntry = (value) => {
-  if (!isRecord4(value)) return void 0;
-  const { path, name, mtime, root } = value;
-  if (typeof path !== "string" || !isAbsolute5(path) || typeof name !== "string" || name === "") return void 0;
-  if (typeof root !== "string" || !isAbsolute5(root)) return void 0;
-  if (typeof mtime !== "number" || !Number.isFinite(mtime) || mtime < 0) return void 0;
-  return { path, name, mtime, root };
-};
 var indexConfigKey = (config) => JSON.stringify({ roots: config.roots, ignore: config.ignore });
 var emptyIndex = () => ({
   version: INDEX_VERSION,
   generatedAt: 0,
   configKey: "",
+  truncated: null,
   entries: []
 });
 var loadIndex = () => {
   const file = indexFile();
-  if (!existsSync5(file)) return emptyIndex();
-  const parsed = tryReadJson(file);
-  if (!isRecord4(parsed) || !Array.isArray(parsed["entries"])) return emptyIndex();
-  const generatedAt = parsed["generatedAt"];
-  const configKey = parsed["configKey"];
-  return {
-    version: INDEX_VERSION,
-    generatedAt: typeof generatedAt === "number" && Number.isFinite(generatedAt) && generatedAt >= 0 ? generatedAt : 0,
-    configKey: typeof configKey === "string" ? configKey : "",
-    entries: parsed["entries"].map(readEntry).filter((e) => e !== void 0)
-  };
+  if (!existsSync8(file)) return emptyIndex();
+  const loaded = parseIndex(tryReadJson(file), INDEX_VERSION);
+  if (loaded === void 0) return emptyIndex();
+  if (loaded.migrated) {
+    try {
+      saveIndex(loaded.index);
+    } catch {
+    }
+  }
+  return loaded.index;
 };
 var saveIndex = (index) => {
-  writeAtomic(indexFile(), `${JSON.stringify(index)}
-`);
+  withStateLock(indexFile(), () => writeAtomic(indexFile(), `${JSON.stringify(index)}
+`));
 };
 var isStale = (index, now) => index.generatedAt > now || now - index.generatedAt > INDEX_TTL_MS;
 var matchesConfig = (index, config) => index.configKey === indexConfigKey(config);
 var shouldSkip = (name, ignore) => name.startsWith(HIDDEN_PREFIX) || ignore.includes(name);
-var canonical = (dir) => {
+var DEFAULT_LIMITS = { maxEntries: MAX_ENTRIES, maxWalkMs: MAX_WALK_MS };
+var shouldStop = (state) => {
+  if (state.entries.length >= state.maxEntries) {
+    state.truncated = "entries";
+    return true;
+  }
+  if (Date.now() > state.deadline) {
+    state.truncated = "time";
+    return true;
+  }
+  return false;
+};
+var canonical2 = (dir) => {
   try {
-    return realpathSync(dir);
+    return realpathSync3(dir);
   } catch {
     return void 0;
   }
 };
 var mtimeOf = (dir) => {
   try {
-    return statSync2(dir).mtimeMs;
+    return statSync5(dir).mtimeMs;
   } catch {
     return 0;
   }
 };
 var isDirectoryPath = (path) => {
   try {
-    return statSync2(path).isDirectory();
+    return statSync5(path).isDirectory();
   } catch {
     return false;
   }
@@ -569,7 +1005,7 @@ var isDirectoryPath = (path) => {
 var listDirs = (dir, ignore) => {
   let entries;
   try {
-    entries = readdirSync2(dir, { withFileTypes: true }).filter((d) => d.isDirectory() || d.isSymbolicLink()).map((d) => ({ name: d.name, link: d.isSymbolicLink() }));
+    entries = readdirSync3(dir, { withFileTypes: true }).filter((d) => d.isDirectory() || d.isSymbolicLink()).map((d) => ({ name: d.name, link: d.isSymbolicLink() }));
   } catch {
     return [];
   }
@@ -577,33 +1013,39 @@ var listDirs = (dir, ignore) => {
 };
 var walk = (dir, depth, root, state) => {
   if (depth > root.depth) return;
-  if (state.entries.length >= MAX_ENTRIES || Date.now() > state.deadline) return;
+  if (shouldStop(state)) return;
   for (const child of listDirs(dir, state.ignore)) {
-    if (state.entries.length >= MAX_ENTRIES || Date.now() > state.deadline) return;
-    const real = canonical(child);
-    if (real === void 0 || state.seen.has(real)) continue;
+    if (shouldStop(state)) return;
+    const real = canonical2(child);
+    if (real === void 0 || !isUnder(real, state.canonicalRoot) || !isProtocolSafePath(child) || !isProtocolSafePath(real) || state.seen.has(real)) continue;
     state.seen.add(real);
-    state.entries.push({ path: child, name: basename2(child), mtime: mtimeOf(child), root: root.path });
+    state.entries.push({ path: child, name: basename3(child), mtime: mtimeOf(child), root: root.path, realPath: real });
     walk(child, depth + 1, root, state);
   }
 };
-var buildIndex = (config, now = Date.now()) => {
+var buildIndex = (config, now = Date.now(), limits = DEFAULT_LIMITS) => {
   const state = {
     entries: [],
     seen: /* @__PURE__ */ new Set(),
-    deadline: Date.now() + MAX_WALK_MS,
-    ignore: config.ignore
+    deadline: Date.now() + limits.maxWalkMs,
+    ignore: config.ignore,
+    maxEntries: Math.max(1, limits.maxEntries),
+    canonicalRoot: "",
+    truncated: null
   };
   for (const root of config.roots) {
-    if (!existsSync5(root.path)) continue;
-    const real = canonical(root.path);
-    if (real !== void 0) state.seen.add(real);
+    if (!existsSync8(root.path)) continue;
+    const real = canonical2(root.path);
+    if (real === void 0) continue;
+    state.canonicalRoot = real;
+    state.seen.add(real);
     walk(root.path, 1, root, state);
   }
   return {
     version: INDEX_VERSION,
     generatedAt: now,
     configKey: indexConfigKey(config),
+    truncated: state.truncated,
     entries: state.entries
   };
 };
@@ -634,11 +1076,23 @@ var reportAi = (ai) => {
 var reportRoots = (config) => {
   note(`roots  ${config.roots.length}`);
   for (const root of config.roots) {
-    note(`  ${mark(existsSync6(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
+    note(`  ${mark(existsSync9(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
   }
   reportAi(config.ai);
 };
-var runDoctor = () => {
+var doctorArgs = (args) => {
+  if (args.length === 0) return null;
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    note("usage: cdai doctor");
+    return EXIT.ok;
+  }
+  note("cdai: usage: cdai doctor");
+  return EXIT.error;
+};
+var stateIsPrivate = () => hasPrivateMode(configDir(), true) && hasPrivateMode(dataDir(), true) && [configFile(), indexFile(), dbFile(), aliasesFile(), visitsLog()].filter(existsSync9).every((path) => hasPrivateMode(path, false));
+var runDoctor = (args = []) => {
+  const handled = doctorArgs(args);
+  if (handled !== null) return handled;
   note("cdai doctor");
   note(`node   ${process.version}`);
   note(`config ${mark(configExists())} ${configFile()}`);
@@ -651,21 +1105,25 @@ var runDoctor = () => {
   reportRoots(config);
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE);
-  const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
-  note(`index  ${mark(existsSync6(indexFile()))} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? " (stale)" : ""}`);
-  note(`db     ${mark(existsSync6(dbFile()))} ${loadDb().records.length} remembered paths`);
-  note(`alias  ${mark(existsSync6(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
-  note(`visits ${mark(existsSync6(visitsLog()))} ${visitsLog()}`);
+  const compatible = matchesConfig(index, config);
+  const stale = isStale(index, Date.now()) || !compatible;
+  const partial = index.truncated === null ? "" : ` (partial: ${index.truncated} limit)`;
+  note(`index  ${mark(existsSync9(indexFile()) && compatible)} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? " (stale)" : ""}${partial}`);
+  if (!compatible) note("       run `cdai index --refresh` to rebuild the cache");
+  note(`db     ${mark(existsSync9(dbFile()))} ${loadDb().records.length} remembered paths`);
+  note(`alias  ${mark(existsSync9(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
+  note(`visits ${mark(existsSync9(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable("fzf") !== null)}`);
   note(`tty    ${mark(hasTty())}`);
+  note(`privacy ${mark(stateIsPrivate())} private state permissions`);
   return EXIT.ok;
 };
 
 // src/commands/complete.ts
-import { existsSync as existsSync7, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync10, statSync as statSync6 } from "node:fs";
 
 // src/match/resolve.ts
-import { basename as basename3, dirname as dirname2 } from "node:path";
+import { basename as basename4, dirname as dirname3 } from "node:path";
 
 // src/match/constants.ts
 var SCORE = {
@@ -706,6 +1164,11 @@ var THRESHOLD = {
   candidate: 400,
   /** Fewer than this many picker-worthy candidates falls through to the AI tier. */
   minPickerCandidates: 2
+};
+var COMPLETION = {
+  /** Short fuzzy fragments create noisy, destructive shell replacements. */
+  minSmartLength: 3,
+  maxTypoLength: 64
 };
 var LIMIT = {
   /** Candidates offered to the picker. */
@@ -755,6 +1218,33 @@ var fuzzyScore = (token, name) => {
   const share = FUZZY.baseShare + FUZZY.densityShare * density + FUZZY.coverageShare * coverage;
   return Math.round(SCORE.fuzzyMax * share);
 };
+var withinEdits = (input, row, column, left) => {
+  while (row < input.token.length && column < input.nameLength && input.token[row] === input.name[column]) {
+    row += 1;
+    column += 1;
+  }
+  const tokenLeft = input.token.length - row;
+  const nameLeft = input.nameLength - column;
+  if (tokenLeft === 0 || nameLeft === 0) return Math.max(tokenLeft, nameLeft) <= left;
+  if (left === 0 || Math.abs(tokenLeft - nameLeft) > left) return false;
+  if (row + 1 < input.token.length && column + 1 < input.nameLength && input.token[row] === input.name[column + 1] && input.token[row + 1] === input.name[column] && withinEdits(input, row + 2, column + 2, left - 1)) return true;
+  return withinEdits(input, row + 1, column + 1, left - 1) || withinEdits(input, row + 1, column, left - 1) || withinEdits(input, row, column + 1, left - 1);
+};
+var hasPrefixWithin = (token, name, edits) => {
+  const start = Math.max(1, token.length - edits);
+  const end = Math.min(name.length, token.length + edits);
+  for (let length = start; length <= end; length += 1) {
+    if (withinEdits({ token, name, nameLength: length }, 0, 0, edits)) return true;
+  }
+  return false;
+};
+var typoScore = (token, name) => {
+  if (token.length < COMPLETION.minSmartLength || token.length > COMPLETION.maxTypoLength) return SCORE.none;
+  if (token[0] !== name[0]) return SCORE.none;
+  const allowance = token.length >= 8 ? 2 : 1;
+  if (hasPrefixWithin(token, name, 1)) return SCORE.fuzzyMax - 40;
+  return allowance === 2 && hasPrefixWithin(token, name, 2) ? SCORE.fuzzyMax - 80 : SCORE.none;
+};
 var hasBoundaryHit = (token, name) => name.split(SEGMENT_SPLIT).some((segment) => segment !== "" && segment.startsWith(token));
 var matchName = (token, name) => {
   const lower = name.toLowerCase();
@@ -762,7 +1252,8 @@ var matchName = (token, name) => {
   if (lower.startsWith(token)) return SCORE.prefix;
   if (hasBoundaryHit(token, lower)) return SCORE.wordBoundary;
   if (lower.includes(token)) return SCORE.substring;
-  return fuzzyScore(token, lower);
+  const fuzzy = fuzzyScore(token, lower);
+  return fuzzy > SCORE.none ? fuzzy : typoScore(token, lower);
 };
 var parentPath = (path) => {
   const idx = path.lastIndexOf("/");
@@ -785,7 +1276,7 @@ var passesFilters = (query, candidate) => {
   if (query.rootFilter === null) return true;
   return candidate.root.toLowerCase().includes(query.rootFilter) || lowerPath.includes(query.rootFilter);
 };
-var scoreCandidate = (query, candidate, context) => {
+var matchQuality = (query, candidate) => {
   if (!passesFilters(query, candidate)) return SCORE.none;
   if (query.tokens.length === 0) return SCORE.none;
   let sum = 0;
@@ -794,10 +1285,12 @@ var scoreCandidate = (query, candidate, context) => {
     if (single === SCORE.none) return SCORE.none;
     sum += single;
   }
-  const base = sum / query.tokens.length;
-  const frecency2 = context.frecencyByPath.get(candidate.path) ?? 0;
+  return sum / query.tokens.length;
+};
+var contextualScore = (query, candidate, context, quality) => {
+  const frecency2 = context.frecencyByPath.get(candidate.realPath ?? candidate.path) ?? 0;
   const underCwd = candidate.path !== context.cwd && candidate.path.startsWith(`${context.cwd}/`) ? BONUS.underCwd : 0;
-  return base + frecencyBonus(frecency2) + underCwd + brevityBonus(query, candidate);
+  return quality + frecencyBonus(frecency2) + underCwd + brevityBonus(query, candidate);
 };
 var looseScore = (query, candidate) => {
   const name = candidate.name.toLowerCase();
@@ -809,35 +1302,75 @@ var looseScore = (query, candidate) => {
   }
   return best;
 };
-var rankCandidates = (query, candidates, context) => candidates.map((candidate) => ({ candidate, score: scoreCandidate(query, candidate, context) })).filter((scored) => scored.score > SCORE.none).sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
+var rankCandidates = (query, candidates, context) => candidates.map((candidate) => {
+  const quality = matchQuality(query, candidate);
+  return { candidate, quality, score: quality === SCORE.none ? SCORE.none : contextualScore(query, candidate, context, quality) };
+}).filter((scored) => scored.score > SCORE.none).sort((a, b) => b.quality - a.quality || b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
+
+// src/match/path-trie.ts
+var node = () => ({ terminal: false, children: /* @__PURE__ */ new Map() });
+var segments = (path) => path.split("/").filter((part) => part !== "");
+var PathChainSet = class {
+  #root = node();
+  hasChain(path) {
+    let current = this.#root;
+    for (const part of segments(path)) {
+      if (current.terminal) return true;
+      const next = current.children.get(part);
+      if (next === void 0) return false;
+      current = next;
+    }
+    return current.terminal || current.children.size > 0;
+  }
+  add(path) {
+    let current = this.#root;
+    for (const part of segments(path)) {
+      let next = current.children.get(part);
+      if (next === void 0) {
+        next = node();
+        current.children.set(part, next);
+      }
+      current = next;
+    }
+    current.terminal = true;
+  }
+};
 
 // src/match/resolve.ts
-var frecencyMap = (db, nowSeconds) => new Map(db.records.map((record) => [record.path, frecency(record, nowSeconds)]));
+var frecencyMap = (db, nowSeconds) => new Map(db.records.map((record) => [record.realPath ?? record.path, frecency(record, nowSeconds)]));
 var buildCandidates = (input) => {
-  const byPath = /* @__PURE__ */ new Map();
-  for (const entry of input.index.entries) byPath.set(entry.path, entry);
+  const byIdentity = /* @__PURE__ */ new Map();
+  for (const entry of input.index.entries) byIdentity.set(entry.realPath, entry);
   for (const record of input.db.records) {
-    if (byPath.has(record.path)) continue;
-    byPath.set(record.path, { path: record.path, name: basename3(record.path), mtime: 0, root: "" });
+    const identity = record.realPath ?? record.path;
+    if (byIdentity.has(identity)) continue;
+    byIdentity.set(identity, {
+      path: record.path,
+      name: basename4(record.path),
+      mtime: 0,
+      root: "",
+      realPath: identity
+    });
   }
-  return [...byPath.values()];
+  return [...byIdentity.values()];
 };
-var isChained = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 var collapseChains = (ranked) => {
   const kept = [];
+  const paths = new PathChainSet();
   for (const scored of ranked) {
-    if (kept.some((k) => isChained(k.candidate.path, scored.candidate.path))) continue;
+    if (paths.hasChain(scored.candidate.path)) continue;
     kept.push(scored);
+    paths.add(scored.candidate.path);
   }
   return kept;
 };
 var dropDescendants = (ranked) => {
   const paths = new Set(ranked.map((r) => r.candidate.path));
   return ranked.filter((scored) => {
-    let parent = dirname2(scored.candidate.path);
+    let parent = dirname3(scored.candidate.path);
     while (parent.length > 1) {
       if (paths.has(parent)) return false;
-      parent = dirname2(parent);
+      parent = dirname3(parent);
     }
     return true;
   });
@@ -846,7 +1379,8 @@ var pickByMtime = (candidates, newest) => [...candidates].sort((a, b) => newest 
 var orderPool = (ranked, index) => {
   const best = ranked[0];
   if (best === void 0) return [];
-  const contenders = ranked.filter((r) => r.score >= best.score - THRESHOLD.gap);
+  const quality = best.quality ?? best.score;
+  const contenders = ranked.filter((r) => (r.quality ?? r.score) >= quality - THRESHOLD.gap);
   return contenders.flatMap((r) => childrenOf(index, r.candidate.path));
 };
 var applyOrder = (query, ranked, index) => {
@@ -863,15 +1397,17 @@ var decide = (ranked) => {
   const best = ranked[0];
   if (best === void 0) return { kind: "unsure", candidates: [] };
   const runnerUp = ranked[1];
-  const gap = best.score - (runnerUp?.score ?? 0);
-  if (best.score >= THRESHOLD.hit && gap >= THRESHOLD.gap) {
+  const quality = best.quality ?? best.score;
+  const runnerQuality = runnerUp?.quality ?? runnerUp?.score ?? 0;
+  const gap = quality === runnerQuality ? best.score - (runnerUp?.score ?? 0) : quality - runnerQuality;
+  if (quality >= THRESHOLD.hit && gap >= THRESHOLD.gap) {
     return { kind: "hit", path: best.candidate.path, score: best.score };
   }
-  const shortlist = ranked.filter((r) => r.score >= THRESHOLD.candidate).slice(0, LIMIT.picker);
+  const shortlist = ranked.filter((r) => (r.quality ?? r.score) >= THRESHOLD.candidate).slice(0, LIMIT.picker);
   if (shortlist.length >= THRESHOLD.minPickerCandidates) {
     return { kind: "choose", candidates: shortlist };
   }
-  if (shortlist.length === 1 && best.score >= THRESHOLD.hit) {
+  if (shortlist.length === 1 && quality >= THRESHOLD.hit) {
     return { kind: "hit", path: best.candidate.path, score: best.score };
   }
   return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
@@ -890,6 +1426,23 @@ var resolveQuery = (query, input) => {
   const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
   return decide(ranked);
 };
+
+// src/match/completion.ts
+var completionKindRank = (kind) => kind === "literal" ? 2 : 1;
+var smartNameMatch = (fragment, name) => {
+  if (fragment === "") return void 0;
+  const token = fragment.toLowerCase();
+  const lower = name.toLowerCase();
+  const literal = matchName(token, lower);
+  if (literal >= SCORE.prefix) return { kind: "literal", strength: literal };
+  if (token.length < COMPLETION.minSmartLength) return void 0;
+  if (literal >= SCORE.substring) return { kind: "literal", strength: literal };
+  const compact = fuzzyScore(token, lower);
+  if (token[0] === lower[0] && compact > SCORE.none) return { kind: "compact", strength: compact };
+  if (compact > SCORE.none) return void 0;
+  return literal > SCORE.none ? { kind: "typo", strength: literal } : void 0;
+};
+var isSmartNameMatch = (fragment, name) => smartNameMatch(fragment, name) !== void 0;
 
 // src/match/tokenize.ts
 var YEAR_PATTERN = /^\d{4}$/;
@@ -936,7 +1489,12 @@ var tokenize = (input) => {
   const { rest: afterIn, rootFilter } = takeRootFilter(words);
   const { rest: afterOrder, order } = takeOrder(afterIn);
   const years = afterOrder.filter(isYear);
-  const tokens = afterOrder.filter((word) => !isYear(word) && !STOPWORDS.has(word));
+  const searchable = afterOrder.filter((word) => !isYear(word));
+  const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
+  const tokens = meaningful.length > 0 ? meaningful : searchable;
+  if (tokens.length === 0 && words.length > 0) {
+    return { raw: input, tokens: words, order: "none", years: [], rootFilter: null };
+  }
   return { raw: input, tokens, order, years, rootFilter };
 };
 var tokenizeArgs = (args) => tokenize(args.join(" "));
@@ -948,6 +1506,7 @@ var CLI_CONTROLS = [
   "index",
   "import",
   "doctor",
+  "alias",
   "query",
   "complete",
   "--help",
@@ -959,6 +1518,7 @@ var CLI_CONTROL_PATTERN = CLI_CONTROLS.join("|");
 var CLI_CONTROL_WORDS = CLI_CONTROLS.join(" ");
 var ZSH_CD_FLAG_CHARS = "qLsP";
 var BASH_CD_FLAG_CHARS = "LPe@";
+var BASH_PORTABLE_CD_FLAG_CHARS = "LP";
 var CD_FLAG = new RegExp(`^-[${ZSH_CD_FLAG_CHARS}${BASH_CD_FLAG_CHARS}]+$`);
 var stripCdOptions = (args) => {
   let cursor = 0;
@@ -971,44 +1531,105 @@ var stripCdOptions = (args) => {
   return args.slice(cursor);
 };
 
+// src/commands/completion-aliases.ts
+import { basename as basename5 } from "node:path";
+var isPathIntent = (words) => words.some((word) => word.includes("/") || word.startsWith("~"));
+var aliasWord = (typed, alias) => {
+  const expected = alias.query.split(" ");
+  const cursor = typed.length - 1;
+  if (cursor < 0 || cursor >= expected.length) return void 0;
+  if (!typed.slice(0, cursor).every((word, index) => word.toLowerCase() === expected[index])) {
+    return void 0;
+  }
+  const candidate = expected[cursor];
+  return candidate !== void 0 && isSmartNameMatch(typed[cursor] ?? "", candidate) ? candidate : void 0;
+};
+var completeAliasWords = (args, aliases, config) => {
+  const words = stripCdOptions(args);
+  if (words.length === 0 || isPathIntent(words)) return [];
+  return aliases.filter((alias) => config.roots.some((root) => isUnder(alias.path, root.path))).map((alias) => aliasWord(words, alias)).filter((word) => word !== void 0);
+};
+var completeRootNames = (args, config) => {
+  const words = stripCdOptions(args);
+  if (words.length < 2 || words.at(-2)?.toLowerCase() !== "in") return null;
+  const fragment = words.at(-1) ?? "";
+  return config.roots.map((root) => basename5(root.path)).filter((name) => isSmartNameMatch(fragment, name));
+};
+
 // src/commands/complete.ts
 var COMPLETION_LIMIT = 20;
 var MILLIS_PER_SECOND = 1e3;
-var RECORD_SEPARATOR = /[\t\r\n]/;
+var CLI_CONTROL_SET = new Set(CLI_CONTROLS);
+var FUZZY_LIMIT = 5;
+var VALIDATION_ATTEMPT_LIMIT = 512;
 var isDirectory = (path) => {
   try {
-    return existsSync7(path) && statSync3(path).isDirectory();
+    return existsSync10(path) && statSync6(path).isDirectory();
   } catch {
     return false;
   }
 };
+var hasUnsafeCompletionChar = (value) => [...value].some((char) => {
+  const code = char.codePointAt(0) ?? 0;
+  return code <= 31 || code === 127;
+});
+var safelyMerge = (args, matches) => {
+  const unique = [...new Set(matches)];
+  if (unique.length <= 1) return unique;
+  const active = stripCdOptions(args).at(-1)?.toLowerCase() ?? "";
+  return unique.filter((match) => match.toLowerCase().startsWith(active));
+};
+var nameMatch = (fragments, name) => fragments.map((fragment) => smartNameMatch(fragment, name)).filter((match) => match !== void 0).sort((a, b) => completionKindRank(b.kind) - completionKindRank(a.kind) || b.strength - a.strength)[0];
+var liveCandidates = (ranked) => {
+  const live = [];
+  for (const candidate of ranked.slice(0, VALIDATION_ATTEMPT_LIMIT)) {
+    if (isDirectory(candidate.candidate.path)) live.push(candidate);
+    if (live.length >= COMPLETION_LIMIT) break;
+  }
+  return live;
+};
 var safeCandidates = (args, input) => {
-  const query = tokenizeArgs(stripCdOptions(args));
-  if (query.tokens.length === 0) return [];
-  const context = {
-    cwd: input.cwd,
-    frecencyByPath: frecencyMap(input.db, input.nowSeconds)
-  };
-  return collapseChains(rankCandidates(query, buildCandidates(input), context)).filter(
-    ({ candidate, score }) => score >= THRESHOLD.candidate && !RECORD_SEPARATOR.test(candidate.name) && (candidate.root !== "" || isDirectory(candidate.path))
-  );
+  const words = stripCdOptions(args);
+  if (words.some((word) => word.includes("/") || word.startsWith("~"))) {
+    return { candidates: [], nameCounts: /* @__PURE__ */ new Map() };
+  }
+  const query = tokenizeArgs(words);
+  if (query.tokens.length === 0) return { candidates: [], nameCounts: /* @__PURE__ */ new Map() };
+  const context = { cwd: input.cwd, frecencyByPath: frecencyMap(input.db, input.nowSeconds) };
+  const active = words.at(-1)?.toLowerCase() ?? "";
+  const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
+  const activeMatches = STOPWORDS.has(active) ? [] : ranked.map((scored) => ({ ...scored, completion: smartNameMatch(active, scored.candidate.name) })).filter((item) => item.completion !== void 0);
+  const matched = activeMatches.length > 0 ? activeMatches : ranked.map((scored) => ({ ...scored, completion: nameMatch(query.tokens, scored.candidate.name) })).filter((item) => item.completion !== void 0);
+  const ordered = matched.filter(({ candidate }) => !hasUnsafeCompletionChar(candidate.name) && !hasUnsafeCompletionChar(candidate.path)).sort((a, b) => completionKindRank(b.completion.kind) - completionKindRank(a.completion.kind) || b.completion.strength - a.completion.strength || (b.quality ?? b.score) - (a.quality ?? a.score) || b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
+  const nameCounts = /* @__PURE__ */ new Map();
+  ordered.forEach(({ candidate }) => nameCounts.set(candidate.name, (nameCounts.get(candidate.name) ?? 0) + 1));
+  return { candidates: liveCandidates(ordered), nameCounts };
 };
 var completeQuery = (args, input) => {
-  const ranked = safeCandidates(args, input);
-  const counts = /* @__PURE__ */ new Map();
-  ranked.forEach(({ candidate }) => counts.set(candidate.name, (counts.get(candidate.name) ?? 0) + 1));
-  const values = ranked.map(
-    ({ candidate }) => counts.get(candidate.name) === 1 ? candidate.name : candidate.path
-  );
-  return [...new Set(values)].slice(0, COMPLETION_LIMIT);
+  const intentWords = stripCdOptions(args).length;
+  const safe = safeCandidates(args, input);
+  const best = safe.candidates[0]?.completion;
+  const ranked = safe.candidates.filter((item) => best !== void 0 && completionKindRank(item.completion.kind) === completionKindRank(best.kind) && item.completion.strength === best.strength).slice(0, best?.kind === "literal" ? COMPLETION_LIMIT : FUZZY_LIMIT);
+  const values = ranked.map(({ candidate }) => {
+    const count = safe.nameCounts.get(candidate.name) ?? 0;
+    if (intentWords === 1 && count > 1 && CLI_CONTROL_SET.has(candidate.name)) return void 0;
+    const reserved = intentWords === 1 && count === 1 && CLI_CONTROL_SET.has(candidate.name);
+    return reserved ? candidate.path : candidate.name;
+  }).filter((value) => value !== void 0);
+  return safelyMerge(args, values).slice(0, COMPLETION_LIMIT);
 };
 var runComplete = (args) => {
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
   const config = loadConfig();
+  const roots = completeRootNames(args, config);
+  const aliases = loadAliases().aliases.filter((alias) => isDirectory(alias.path));
+  const remembered = completeAliasWords(args, aliases, config).filter((word) => !hasUnsafeCompletionChar(word));
   const index = loadIndex();
-  if (!matchesConfig(index, config)) return EXIT.ok;
-  const input = { index, db: loadDb(), cwd: process.cwd(), nowSeconds };
-  const matches = completeQuery(args, input);
+  const indexed = matchesConfig(index, config) ? completeQuery(args, { index, db: loadDb(), cwd: process.cwd(), nowSeconds }) : [];
+  const reserved = remembered.slice(0, FUZZY_LIMIT);
+  const indexedLimit = COMPLETION_LIMIT - reserved.length;
+  const combined = roots ?? [...indexed.slice(0, indexedLimit), ...reserved];
+  const matches = safelyMerge(args, combined);
   if (matches.length > 0) process.stdout.write(`${matches.join("\n")}
 `);
   return EXIT.ok;
@@ -1016,7 +1637,7 @@ var runComplete = (args) => {
 
 // src/commands/import-zoxide.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync11 } from "node:fs";
 var ZOXIDE = "zoxide";
 var ZOXIDE_ARGS = ["query", "--list", "--score"];
 var MILLIS_PER_SECOND2 = 1e3;
@@ -1048,36 +1669,59 @@ var runImportZoxide = () => {
     return EXIT.error;
   }
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
-  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync8(r.path));
-  const db = loadDb();
-  const byPath = new Map(db.records.map((record) => [record.path, record]));
-  for (const record of imported) {
-    if (byPath.has(record.path)) continue;
-    byPath.set(record.path, record);
-  }
-  saveDb({ version: db.version, records: [...byPath.values()] });
+  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync11(r.path));
+  updateDb((db) => {
+    const byPath = new Map(db.records.map((record) => [record.path, record]));
+    for (const record of imported) {
+      if (byPath.has(record.path)) continue;
+      byPath.set(record.path, record);
+    }
+    return { ...db, records: [...byPath.values()] };
+  });
   note(`cdai: imported ${imported.length} paths from zoxide`);
   return EXIT.ok;
 };
 
 // src/commands/index-cmd.ts
 var MILLIS_PER_MINUTE2 = 6e4;
+var INDEX_USAGE = "usage: cdai index [--refresh]";
+var validateArgs = (args) => {
+  if (args.includes("--help") || args.includes("-h")) {
+    if (args.length !== 1) {
+      fail("unexpected index arguments", INDEX_USAGE);
+      return EXIT.error;
+    }
+    note(INDEX_USAGE);
+    return EXIT.ok;
+  }
+  if (args.some((arg) => arg !== "--refresh") || args.filter((arg) => arg === "--refresh").length > 1) {
+    fail("unknown index option", INDEX_USAGE);
+    return EXIT.error;
+  }
+  return null;
+};
+var refresh = (config) => {
+  const started = Date.now();
+  const index = refreshIndex(config);
+  note(`cdai: indexed ${index.entries.length} directories in ${Date.now() - started}ms`);
+  if (index.truncated === null) return EXIT.ok;
+  fail(`index is partial (${index.truncated} limit)`, "narrow roots, reduce depth, or split large roots");
+  return EXIT.error;
+};
 var runIndex = (args) => {
+  const handled = validateArgs(args);
+  if (handled !== null) return handled;
   const config = loadConfig();
   if (config.roots.length === 0) {
     fail("no roots configured", "run `cdai setup` once to pick the directories to learn");
     return EXIT.error;
   }
-  if (args.includes("--refresh")) {
-    const started = Date.now();
-    const index2 = refreshIndex(config);
-    note(`cdai: indexed ${index2.entries.length} directories in ${Date.now() - started}ms`);
-    return EXIT.ok;
-  }
+  if (args.includes("--refresh")) return refresh(config);
   const index = loadIndex();
   const ageMinutes = Math.round((Date.now() - index.generatedAt) / MILLIS_PER_MINUTE2);
   const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
-  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${stale ? " (stale)" : ""}`);
+  const partial = index.truncated === null ? "" : ` (partial: ${index.truncated} limit)`;
+  note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${stale ? " (stale)" : ""}${partial}`);
   for (const root of config.roots) {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);
@@ -1086,13 +1730,67 @@ var runIndex = (args) => {
 };
 
 // src/commands/query.ts
-import { existsSync as existsSync9, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync12, statSync as statSync8 } from "node:fs";
 
 // src/ai/client.ts
+import { statSync as statSync7 } from "node:fs";
+import { resolve as resolve4 } from "node:path";
+
+// src/ai/process.ts
 import { spawn } from "node:child_process";
-import { statSync as statSync4 } from "node:fs";
-import { resolve as resolve3 } from "node:path";
 var MAX_OUTPUT_BYTES = 1024 * 1024;
+var KILL_GRACE_MS = 250;
+var spawnBackend = (backend2, prompt) => spawn(backend2.command, aiArgs(backend2, prompt), {
+  detached: process.platform !== "win32",
+  env: { ...process.env, NO_COLOR: "1" },
+  stdio: ["ignore", "pipe", "ignore"]
+});
+var terminateBackend = (child, signal) => {
+  try {
+    if (process.platform !== "win32" && child.pid !== void 0) process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+  }
+};
+var abortBackend = (child, error, finish2) => {
+  terminateBackend(child, "SIGTERM");
+  child.stdout.destroy();
+  const escalation = setTimeout(() => terminateBackend(child, "SIGKILL"), KILL_GRACE_MS);
+  escalation.unref();
+  finish2(error);
+};
+var collectOutput = (child, output, abort, label) => {
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    output.text += chunk;
+    output.bytes += Buffer.byteLength(chunk);
+    if (output.bytes > MAX_OUTPUT_BYTES) abort(new Error(`${label} output exceeded 1 MiB`));
+  });
+};
+var runAiCommand = (backend2, prompt, timeoutMs) => new Promise((resolveOutput, reject) => {
+  const child = spawnBackend(backend2, prompt);
+  const output = { text: "", bytes: 0 };
+  let settled = false;
+  const finish2 = (error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (error === null) resolveOutput(output.text);
+    else reject(error);
+  };
+  const abort = (error) => {
+    if (!settled) abortBackend(child, error, finish2);
+  };
+  const timer = setTimeout(
+    () => abort(new Error(`${backend2.kind} timed out after ${String(timeoutMs)}ms`)),
+    timeoutMs
+  );
+  collectOutput(child, output, abort, backend2.kind);
+  child.on("error", finish2);
+  child.on("close", (code) => finish2(code === 0 ? null : new Error(`${backend2.kind} exited with ${String(code)}`)));
+});
+
+// src/ai/client.ts
 var MAX_JSON_CANDIDATES = 32;
 var MAX_ENVELOPE_DEPTH = 6;
 var MAX_REASON_LENGTH = 120;
@@ -1107,7 +1805,7 @@ var ENVELOPE_KEYS = [
   "choices",
   "candidates"
 ];
-var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var parseJson = (text) => {
   try {
     return JSON.parse(text);
@@ -1142,7 +1840,7 @@ var jsonValues = (text) => {
   return values;
 };
 var directAnswer = (value) => {
-  if (!isRecord5(value) || !Object.hasOwn(value, "path")) return null;
+  if (!isRecord7(value) || !Object.hasOwn(value, "path")) return null;
   const path = value["path"];
   if (path !== null && typeof path !== "string") return null;
   const reason = value["reason"];
@@ -1153,7 +1851,7 @@ var directAnswer = (value) => {
 };
 var childrenOf2 = (value) => {
   if (Array.isArray(value)) return value;
-  if (!isRecord5(value)) return [];
+  if (!isRecord7(value)) return [];
   return ENVELOPE_KEYS.flatMap((key) => Object.hasOwn(value, key) ? [value[key]] : []);
 };
 var parseAiAnswer = (raw) => {
@@ -1174,38 +1872,9 @@ var parseAiAnswer = (raw) => {
   }
   return null;
 };
-var runCommand = (backend2, prompt, timeoutMs) => new Promise((resolveOutput, reject) => {
-  const child = spawn(backend2.command, aiArgs(backend2, prompt), {
-    env: { ...process.env, NO_COLOR: "1" },
-    stdio: ["ignore", "pipe", "ignore"]
-  });
-  let output = "";
-  let settled = false;
-  const timer = setTimeout(() => {
-    child.kill();
-    finish2(new Error(`${backend2.kind} timed out after ${String(timeoutMs)}ms`));
-  }, timeoutMs);
-  const finish2 = (error) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    if (error === null) resolveOutput(output);
-    else reject(error);
-  };
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    if (settled) return;
-    output += chunk;
-    if (Buffer.byteLength(output) <= MAX_OUTPUT_BYTES) return;
-    child.kill();
-    finish2(new Error(`${backend2.kind} output exceeded 1 MiB`));
-  });
-  child.on("error", finish2);
-  child.on("close", (code) => finish2(code === 0 ? null : new Error(`${backend2.kind} exited with ${String(code)}`)));
-});
 var isDirectory2 = (path) => {
   try {
-    return statSync4(path).isDirectory();
+    return statSync7(path).isDirectory();
   } catch {
     return false;
   }
@@ -1213,11 +1882,11 @@ var isDirectory2 = (path) => {
 var matchAiPath = (path, candidates) => {
   let requested;
   try {
-    requested = resolve3(path);
+    requested = resolve4(path);
   } catch {
     return null;
   }
-  return candidates.find((candidate) => resolve3(candidate) === requested && isDirectory2(candidate)) ?? null;
+  return candidates.find((candidate) => resolve4(candidate) === requested && isDirectory2(candidate)) ?? null;
 };
 var sanitizeReason = (reason) => {
   const visible = [...reason].map((char) => {
@@ -1230,7 +1899,7 @@ var askAi = async (request, backend2, timeoutMs) => {
   if (request.candidates.length === 0) return { kind: "none", why: "no candidates" };
   let raw;
   try {
-    raw = await runCommand(backend2, request.prompt, timeoutMs);
+    raw = await runAiCommand(backend2, request.prompt, timeoutMs);
   } catch (error) {
     return { kind: "none", why: error instanceof Error ? error.message : "ai backend failed" };
   }
@@ -1273,7 +1942,7 @@ var buildAiRequest = (input) => {
 var MILLIS_PER_SECOND3 = 1e3;
 var isDirectory3 = (path) => {
   try {
-    return existsSync9(path) && statSync5(path).isDirectory();
+    return existsSync12(path) && statSync8(path).isDirectory();
   } catch {
     return false;
   }
@@ -1290,6 +1959,10 @@ var suggest = (ranked, raw) => {
   return EXIT.error;
 };
 var jumpKnown = (path) => {
+  if (!isProtocolSafePath(path)) {
+    fail("matched path contains a line break unsupported by shell transport");
+    return EXIT.error;
+  }
   jump(path);
   return EXIT.ok;
 };
@@ -1314,10 +1987,15 @@ var acceptAi = (outcome, context) => {
   rememberAlias(context.query.raw, outcome.path, context.nowSeconds);
   return jumpKnown(outcome.path);
 };
+var declineHeadlessAi = () => {
+  note("cdai: AI confirmation requires a terminal [no terminal, declined]");
+  return EXIT.noCd;
+};
 var aiTier = async (strict, context) => {
   const { ai } = context.config;
   const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
   if (!ai.enabled) return suggest(ranked, context.query.raw);
+  if (!hasTty()) return declineHeadlessAi();
   const request = buildAiRequest({
     query: context.query.raw,
     cwd: process.cwd(),
@@ -1361,7 +2039,7 @@ var finish = async (decision, context, refreshed) => {
 };
 var freshIndex = (config) => {
   const index = loadIndex();
-  if (index.entries.length > 0 && matchesConfig(index, config)) return { index, refreshed: false };
+  if (matchesConfig(index, config)) return { index, refreshed: false };
   return { index: refreshIndex(config), refreshed: true };
 };
 var searchInput = (args) => {
@@ -1402,10 +2080,11 @@ var runQuery = async (args) => {
 };
 
 // src/commands/setup.ts
-import { basename as basename4 } from "node:path";
+import { statSync as statSync9 } from "node:fs";
+import { basename as basename6 } from "node:path";
 
 // src/commands/detect.ts
-import { existsSync as existsSync10, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync13, readdirSync as readdirSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
 var DEV_DIR_NAMES = ["dev", "code", "src", "projects", "work", "Developer", "repos", "git"];
@@ -1417,7 +2096,7 @@ var CLOUD_SCAN_DEPTH = 4;
 var CLOUD_SCAN_MS = 3e3;
 var childDirs = (dir) => {
   try {
-    return readdirSync3(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).map((entry) => join5(dir, entry.name));
+    return readdirSync4(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).map((entry) => join5(dir, entry.name));
   } catch {
     return [];
   }
@@ -1439,13 +2118,59 @@ var detectRoots = (home = homedir2()) => {
   const roots = [];
   for (const name of DEV_DIR_NAMES) {
     const dir = join5(home, name);
-    if (existsSync10(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
+    if (existsSync13(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
   }
   for (const cloud of cloudRoots(home)) {
     const hub = bestHub(cloud);
     if (hub !== null) roots.push({ path: hub, depth: CLOUD_DEPTH });
   }
   return roots;
+};
+
+// src/commands/setup-options.ts
+var SETUP_USAGE = [
+  "usage: cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]",
+  "                  [--remove-root <path>]",
+  "       --yes is required to accept roots without a terminal",
+  "       first-time headless setup also requires --ai or --no-ai"
+].join("\n");
+var valueAfter = (args, index, option) => {
+  const value = args[index + 1];
+  return value === void 0 || value === "" ? { error: `${option} requires a path` } : value;
+};
+var validDepth = (value) => {
+  const parsed = value === void 0 ? Number.NaN : Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_DEPTH ? parsed : null;
+};
+var parseSetupOptions = (args) => {
+  let yes = false, depthSet = false, help = false;
+  let ai = null;
+  let depth = DEFAULT_DEPTH;
+  const roots = [], removeRoots = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--yes") yes = true;
+    else if (arg === "--ai" || arg === "--no-ai") {
+      const next = arg === "--ai";
+      if (ai !== null && ai !== next) return { error: "choose either --ai or --no-ai, not both" };
+      ai = next;
+    } else if (arg === "--root" || arg === "--remove-root") {
+      const value = valueAfter(args, i, arg);
+      if (typeof value !== "string") return value;
+      (arg === "--root" ? roots : removeRoots).push(value);
+      i += 1;
+    } else if (arg === "--depth") {
+      const parsed = validDepth(args[++i]);
+      if (parsed === null) {
+        return { error: `--depth must be an integer from 1 to ${String(MAX_DEPTH)}` };
+      }
+      depth = parsed;
+      depthSet = true;
+    } else if (arg === "--help" || arg === "-h") help = true;
+    else return { error: `unknown setup option: ${arg ?? ""}` };
+  }
+  if (depthSet && roots.length === 0) return { error: "--depth requires --root" };
+  return { options: { yes, ai, roots, removeRoots, depth, help } };
 };
 
 // src/commands/setup.ts
@@ -1455,11 +2180,11 @@ var SHELL_LINES = {
   fish: "cdai init fish | source   # in ~/.config/fish/config.fish"
 };
 var DEFAULT_SHELL = "zsh";
-var AI_DISCLOSURE = "vague queries and candidate directory paths may be sent to that backend";
+var AI_DISCLOSURE = "vague queries, current directory, and candidate directory paths may be sent to that backend";
 var currentShell = () => {
   const shell = process.env["SHELL"];
   if (shell === void 0 || shell === "") return DEFAULT_SHELL;
-  const name = basename4(shell);
+  const name = basename6(shell);
   return name in SHELL_LINES ? name : DEFAULT_SHELL;
 };
 var mergeRoots = (existing, added) => {
@@ -1476,12 +2201,13 @@ var acceptedRoots = (candidates, all) => {
   candidates.forEach((root) => note(`      ${contractTilde(root.path)} (depth ${root.depth})`));
   return [...candidates];
 };
-var selectedAi = (existing, args, all) => {
-  if (args.includes("--no-ai")) return { ...existing.ai, enabled: false };
-  if (args.includes("--ai")) return { ...existing.ai, enabled: true };
+var selectedAi = (existing, choice, all) => {
+  if (choice !== null) return { ...existing.ai, enabled: choice };
   if (existing.roots.length > 0) return existing.ai;
-  if (all) return { ...DEFAULT_AI };
-  const enabled = confirm(`cdai: enable optional AI fallback? ${AI_DISCLOSURE}`);
+  if (all) return { ...DEFAULT_AI, enabled: false };
+  const backend2 = resolveAiBackend(DEFAULT_AI);
+  const label = backend2 === null ? "auto-detected backend when available" : backendLabel(backend2);
+  const enabled = confirm(`cdai: enable optional AI fallback via ${label}? ${AI_DISCLOSURE}`);
   return { ...DEFAULT_AI, enabled };
 };
 var reportAi2 = (ai) => {
@@ -1494,35 +2220,118 @@ var reportAi2 = (ai) => {
   note(`      ${AI_DISCLOSURE}`);
   note("      disable it any time with `cdai setup --no-ai`");
 };
-var runSetup = (args) => {
-  if (args.includes("--ai") && args.includes("--no-ai")) {
-    fail("choose either --ai or --no-ai, not both");
-    return EXIT.error;
+var explicitRootConfigs = (options) => {
+  const roots = [];
+  for (const raw of options.roots) {
+    const path = absolutize(raw);
+    try {
+      if (!statSync9(path).isDirectory()) throw new Error("not a directory");
+    } catch {
+      fail(`setup root is not an existing directory: ${contractTilde(path)}`);
+      return null;
+    }
+    roots.push({ path, depth: options.depth });
   }
-  const all = args.includes("--yes");
-  const existing = loadConfig();
-  const candidates = detectRoots().filter(
-    (root) => !existing.roots.some((known) => known.path === root.path)
+  return roots;
+};
+var setupCandidates = (existing, explicit4, detected) => {
+  const candidates = new Map(explicit4.map((root) => [root.path, root]));
+  for (const root of detected) {
+    if (!candidates.has(root.path) && !existing.some((known) => known.path === root.path)) {
+      candidates.set(root.path, root);
+    }
+  }
+  return [...candidates.values()].filter(
+    (root) => !existing.some((known) => known.path === root.path && known.depth === root.depth)
   );
-  if (candidates.length === 0 && existing.roots.length === 0) {
-    note("cdai: found no obvious project roots, add them by hand:");
-    note(`      ${configFile()}`);
-    return EXIT.error;
+};
+var headlessConsentError = (options, firstSetup, explicitChange) => {
+  if (firstSetup && (!options.yes || options.ai === null)) {
+    return "headless first-time setup needs explicit root acceptance and an AI choice";
   }
-  note("cdai: detected these project roots");
-  const config = {
-    roots: mergeRoots(existing.roots, acceptedRoots(candidates, all)),
-    ignore: existing.ignore.length > 0 ? existing.ignore : [...DEFAULT_IGNORE],
-    ai: selectedAi(existing, args, all)
-  };
+  if (explicitChange && !options.yes) return "headless root additions or depth changes need --yes";
+  return null;
+};
+var saveAndReport = (config, removed) => {
   saveConfig(config);
   note(`cdai: wrote ${configFile()}`);
+  removed.forEach((path) => note(`cdai: removed root ${contractTilde(path)}`));
   reportAi2(config.ai);
   const index = refreshIndex(config);
   note(`cdai: indexed ${index.entries.length} directories`);
-  note("cdai: add this line to your shell config, then open a new shell");
+  if (index.truncated !== null) note(`cdai: warning: index is partial (${index.truncated} limit)`);
+  note("cdai: if not already present, add this line to your shell config");
   note(`      ${SHELL_LINES[currentShell()] ?? SHELL_LINES[DEFAULT_SHELL] ?? ""}`);
-  return EXIT.ok;
+  note("cdai: reload that shell to activate the latest integration");
+  return index.truncated === null ? EXIT.ok : EXIT.error;
+};
+var writeSetup = (existing, options, candidates) => {
+  if (candidates.length > 0) note("cdai: proposed project roots");
+  const accepted = acceptedRoots(candidates, options.yes);
+  const removed = new Set(options.removeRoots.map(absolutize));
+  const independentChange = options.ai !== null || removed.size > 0;
+  if (candidates.length > 0 && accepted.length === 0 && !independentChange) {
+    note("cdai: setup cancelled; no proposed root accepted and nothing was written");
+    return EXIT.noCd;
+  }
+  const retained = existing.roots.filter((root) => !removed.has(root.path));
+  const roots = mergeRoots(retained, accepted);
+  if (roots.length === 0 && removed.size === 0) {
+    note("cdai: setup cancelled; no roots selected and nothing was written");
+    return EXIT.noCd;
+  }
+  const config = {
+    roots,
+    ignore: existing.ignore.length > 0 ? existing.ignore : [...DEFAULT_IGNORE],
+    ai: selectedAi(existing, options.ai, options.yes)
+  };
+  return saveAndReport(config, removed);
+};
+var planSetup = (existing, options) => {
+  const explicit4 = explicitRootConfigs(options);
+  if (explicit4 === null) return null;
+  const removed = options.removeRoots.map(absolutize);
+  const unknown = removed.find((path) => !existing.roots.some((root) => root.path === path));
+  if (unknown !== void 0) {
+    fail(`root is not configured: ${contractTilde(unknown)}`);
+    return null;
+  }
+  if (explicit4.some((root) => removed.includes(root.path))) {
+    fail("the same root cannot be added and removed in one setup command");
+    return null;
+  }
+  const retained = existing.roots.filter((root) => !removed.includes(root.path));
+  const detected = detectRoots().filter((root) => !removed.includes(root.path));
+  return { candidates: setupCandidates(retained, explicit4, detected), explicit: explicit4, removed };
+};
+var runSetup = (args) => {
+  const parsed = parseSetupOptions(args);
+  if ("error" in parsed) {
+    fail(parsed.error, SETUP_USAGE);
+    return EXIT.error;
+  }
+  const options = parsed.options;
+  if (options.help) {
+    note(SETUP_USAGE);
+    return EXIT.ok;
+  }
+  const existing = loadConfig();
+  const terminal = hasTty();
+  const plan = planSetup(existing, options);
+  if (plan === null) return EXIT.error;
+  const explicitChange = plan.candidates.some(
+    (candidate) => plan.explicit.some((root) => root.path === candidate.path)
+  );
+  const consentError = terminal ? null : headlessConsentError(options, existing.roots.length === 0, explicitChange);
+  if (consentError !== null) {
+    fail(consentError, SETUP_USAGE);
+    return EXIT.error;
+  }
+  if (plan.candidates.length === 0 && existing.roots.length === 0 && plan.removed.length === 0) {
+    fail("found no project roots", "run `cdai setup --root <path> --yes --ai|--no-ai`");
+    return EXIT.error;
+  }
+  return writeSetup(existing, options, [...plan.candidates]);
 };
 
 // src/shell/quote.ts
@@ -1537,27 +2346,54 @@ else
 fi
 
 __cdai_record() {
-  [ "$PWD" = "$__CDAI_LAST" ] && return 0
-  __CDAI_LAST="$PWD"
-  printf '%s\\t%s\\n' "$(__cdai_now)" "$PWD" >> "$_CDAI_DATA/visits.log" 2>/dev/null
+  local previous_status=$?
+  if [ "$PWD" != "$__CDAI_LAST" ]; then
+    __CDAI_LAST="$PWD"
+    local previous_umask
+    previous_umask="$(umask)"
+    umask 077
+    printf '%s\\t%s\\n' "$(__cdai_now)" "$PWD" >> "$_CDAI_DATA/visits.log" 2>/dev/null
+    umask "$previous_umask"
+  fi
+  return "$previous_status"
 }
-case "$PROMPT_COMMAND" in
-  *__cdai_record*) ;;
-  *) PROMPT_COMMAND="__cdai_record\${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
-esac`;
+if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == 'declare -a'* ]]; then
+  case " \${PROMPT_COMMAND[*]} " in
+    *' __cdai_record '*) ;;
+    *) PROMPT_COMMAND=(__cdai_record "\${PROMPT_COMMAND[@]}") ;;
+  esac
+else
+  case "\${PROMPT_COMMAND}" in
+    *__cdai_record*) ;;
+    *) PROMPT_COMMAND="__cdai_record\${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+  esac
+fi`;
 var runner = () => `__cdai_run() {
   command \${CDAI_BIN:-cdai} "$@"
 }`;
+var flagDetection = () => `_CDAI_BASH_CD_FLAG_CHARS='${BASH_PORTABLE_CD_FLAG_CHARS}'
+_CDAI_BASH_CD_OPTIONS='-L -P'
+_CDAI_BASH_CD_HELP="$(help cd 2>/dev/null)"
+if [[ "$_CDAI_BASH_CD_HELP" == *'-e'* ]]; then
+  _CDAI_BASH_CD_FLAG_CHARS+='e'
+  _CDAI_BASH_CD_OPTIONS+=' -e'
+fi
+if [[ "$_CDAI_BASH_CD_HELP" == *'-@'* ]]; then
+  _CDAI_BASH_CD_FLAG_CHARS+='@'
+  _CDAI_BASH_CD_OPTIONS+=' -@'
+fi
+unset _CDAI_BASH_CD_HELP`;
 var parser = () => `__cdai_parse() {
   _CDAI_CD_FLAGS=()
   _CDAI_QUERY=()
-  local arg parsing=1
+  local arg parsing=1 literal=0
   for arg in "$@"; do
     if [ "$parsing" -eq 1 ] && [ "$arg" = "--" ]; then
       parsing=0
-    elif [ "$parsing" -eq 1 ] && [[ "$arg" =~ ^-[${BASH_CD_FLAG_CHARS}]+$ ]]; then
+      literal=1
+    elif [ "$parsing" -eq 1 ] && [[ "$arg" =~ ^-[$_CDAI_BASH_CD_FLAG_CHARS]+$ ]]; then
       _CDAI_CD_FLAGS+=("$arg")
-    elif [ "$parsing" -eq 1 ] && [[ "$arg" == [-+]* ]]; then
+    elif [ "$literal" -eq 0 ] && [[ "$arg" == [-+]* ]]; then
       return 1
     else
       parsing=0
@@ -1565,37 +2401,106 @@ var parser = () => `__cdai_parse() {
     fi
   done
 }`;
+var explicit = () => `__cdai_explicit() {
+  local arg
+  for arg in "\${_CDAI_QUERY[@]}"; do
+    [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
+  done
+  return 1
+}`;
+var nativeError = () => `__cdai_native_error() {
+  local output status
+  output="$(builtin cd "$@" 2>&1)"
+  status=$?
+  output="\${output#*cd: }"
+  [ -n "$output" ] && printf 'cdai: cd: %s\\n' "$output" >&2
+  return "$status"
+}`;
 var jumper = () => `cdai() {
   case "\${1-}" in
-    ${CLI_CONTROL_PATTERN}) __cdai_run "$@"; return $? ;;
+    --help|-h|--version|-v) __cdai_run "$@"; return $? ;;
+    ${CLI_CONTROL_PATTERN})
+      if [ "$#" -eq 1 ]; then
+        builtin cd "$1" 2>/dev/null && return
+      fi
+      __cdai_run "$@"; return $? ;;
   esac
   builtin cd "$@" 2>/dev/null && return
   if ! __cdai_parse "$@"; then
-    builtin cd "$@"
-    return
+    __cdai_native_error "$@"
+    return $?
   fi
-  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ] || [[ "\${_CDAI_QUERY[0]}" == */* || "\${_CDAI_QUERY[0]}" == '~'* ]]; then
-    builtin cd "$@"
-    return
+  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ] || __cdai_explicit; then
+    __cdai_native_error "$@"
+    return $?
   fi
   local result
   result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
   [ -n "$result" ] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
+var managementCompleter = () => `if [ "$COMP_CWORD" -ge 2 ]; then
+  case "\${COMP_WORDS[1]}" in
+    setup)
+      case "\${COMP_WORDS[COMP_CWORD-1]}" in
+        --root|--remove-root)
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+          done < <(compgen -d -- "$current") ;;
+        --depth) COMPREPLY=( $(compgen -W '1 2 3 4 5 8 16 32 64' -- "$current") ) ;;
+        *) COMPREPLY=( $(compgen -W '--yes --ai --no-ai --root --remove-root --depth --help' -- "$current") ) ;;
+      esac
+      return ;;
+    index) COMPREPLY=( $(compgen -W '--refresh --help' -- "$current") ); return ;;
+    alias) COMPREPLY=( $(compgen -W 'list forget --help' -- "$current") ); return ;;
+    init) COMPREPLY=( $(compgen -W 'zsh bash fish --help' -- "$current") ); return ;;
+    import) COMPREPLY=( $(compgen -W 'zoxide --help' -- "$current") ); return ;;
+    doctor) COMPREPLY=( $(compgen -W '--help' -- "$current") ); return ;;
+  esac
+fi`;
+var replyHelper = () => `__cdai_reply() {
+  local existing
+  for existing in "\${COMPREPLY[@]}"; do [ "$existing" = "$1" ] && return; done
+  COMPREPLY[\${#COMPREPLY[@]}]="$1"
+}`;
+var optionTracker = () => `for word in "\${COMP_WORDS[@]:1:COMP_CWORD-1}"; do
+    if [ "$word" = '--' ]; then
+      terminated=1
+      option_position=0
+    elif [[ ! "$word" =~ ^-[$_CDAI_BASH_CD_FLAG_CHARS]+$ ]]; then
+      option_position=0
+    fi
+  done`;
+var cdpathCompleter = () => `if [[ -n "\${CDPATH-}" && "$current" != /* && "$current" != ./* && "$current" != ../* && "$current" != '~'* ]]; then
+    local base previous_ifs="$IFS"
+    IFS=:
+    for base in $CDPATH; do
+      [ -n "$base" ] || base=.
+      while IFS= read -r candidate; do
+        [ -n "$candidate" ] && __cdai_reply "\${candidate#"$base"/}"
+      done < <(compgen -d -- "$base/$current")
+    done
+    IFS="$previous_ifs"
+  fi`;
 var completer = () => `__cdai_complete() {
-  local current="\${COMP_WORDS[COMP_CWORD]}"
-  local candidate
+  local current="\${COMP_WORDS[COMP_CWORD]}" candidate word terminated=0 option_position=1
   COMPREPLY=()
-  if [ "\${current#-}" != "$current" ]; then
-    COMPREPLY=( $(compgen -W '-L -P -e -@ --' -- "$current") )
+  ${optionTracker()}
+  ${managementCompleter()}
+  if [ "$terminated" -eq 0 ] && [ "$option_position" -eq 1 ] && [ "\${current#-}" != "$current" ]; then
+    COMPREPLY=( $(compgen -W "$_CDAI_BASH_CD_OPTIONS --" -- "$current") )
     return
   fi
+  ${replyHelper()}
   while IFS= read -r candidate; do
-    [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+    [ -n "$candidate" ] && __cdai_reply "$candidate"
   done < <(compgen -d -- "$current")
+  ${cdpathCompleter()}
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    while IFS= read -r candidate; do [ -n "$candidate" ] && __cdai_reply "$candidate"; done       < <(compgen -W '${CLI_CONTROL_WORDS}' -- "$current")
+  fi
   if __cdai_parse "\${COMP_WORDS[@]:1}"; then
     while IFS= read -r candidate; do
-      [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+      [ -n "$candidate" ] && __cdai_reply "$candidate"
     done < <(__cdai_run complete -- "\${_CDAI_QUERY[@]}" 2>/dev/null)
   fi
 }
@@ -1604,21 +2509,65 @@ var bashInit = () => `# cdai shell integration (bash)
 : \${CDAI_DATA_DIR:=${shellQuote(dataDir())}}
 _CDAI_DATA="$CDAI_DATA_DIR"
 [ -d "$_CDAI_DATA" ] || mkdir -p "$_CDAI_DATA"
+chmod 700 "$_CDAI_DATA" 2>/dev/null || true
 
 ${recorder()}
 
 ${runner()}
 
+${flagDetection()}
+
 ${parser()}
+
+${explicit()}
+
+${nativeError()}
 
 ${jumper()}
 
 ${completer()}
 `;
 
+// src/shell/fish-smart-tab.ts
+var bindings = () => `if status is-interactive
+    bind --preset \\t __cdai_smart_tab
+    bind --preset -M insert \\t __cdai_smart_tab
+    if not bind --user \\t >/dev/null 2>&1
+        bind --user \\t __cdai_smart_tab
+    end
+    if not bind --user -M insert \\t >/dev/null 2>&1
+        bind --user -M insert \\t __cdai_smart_tab
+    end
+end`;
+var fishSmartTab = () => `function __cdai_smart_tab
+    set -l words (commandline -opc)
+    set -l current (commandline -ct)
+    if test -n "$current"; and test (count $words) -gt 0; and test "$words[1]" = cdai
+        if test "$words[-1]" != "$current"
+            set -a words "$current"
+        end
+        set -l query $words[2..-1]
+        if test (count $query) -gt 0; and not contains -- "$query[1]" ${CLI_CONTROL_WORDS}
+            if __cdai_parse $query
+                set -l indexed (__cdai_run complete -- $_CDAI_QUERY 2>/dev/null)
+                if test (count $indexed) -eq 1; and not string match -q -- "$current*" "$indexed[1]"
+                    commandline -rt -- (string escape -- "$indexed[1]")
+                    return
+                end
+            end
+        end
+    end
+    commandline -f complete
+end
+
+${bindings()}`;
+
 // src/shell/fish.ts
 var recorder2 = () => `function __cdai_record --on-variable PWD
+    set -l previous_umask (umask)
+    umask 077
     printf '%s\\t%s\\n' (date +%s) "$PWD" >> "$CDAI_DATA_DIR/visits.log" 2>/dev/null
+    umask $previous_umask
 end`;
 var runner2 = () => `function __cdai_run
     set -l bin cdai
@@ -1627,47 +2576,156 @@ var runner2 = () => `function __cdai_run
     end
     command $bin $argv
 end`;
+var flagDetection2 = () => `set -g _CDAI_FISH_CD_FLAGS 0
+if builtin cd -L -- "$PWD" 2>/dev/null
+    set _CDAI_FISH_CD_FLAGS 1
+end`;
+var argumentParser = () => `function __cdai_parse
+    set -g _CDAI_CD_FLAGS
+    set -g _CDAI_QUERY
+    set -l parsing 1
+    set -l literal 0
+    for arg in $argv
+        if test $parsing -eq 1; and test "$arg" = "--"
+            set parsing 0
+            set literal 1
+        else if test $parsing -eq 1; and test $_CDAI_FISH_CD_FLAGS -eq 1; and string match -qr '^-[LP]+$' -- "$arg"
+            set -a _CDAI_CD_FLAGS "$arg"
+        else if test $parsing -eq 1; and test $_CDAI_FISH_CD_FLAGS -eq 1; and contains -- "$arg" --no-dereference --dereference
+            set -a _CDAI_CD_FLAGS "$arg"
+        else if test $literal -eq 0; and string match -qr '^[-+]' -- "$arg"
+            return 1
+        else
+            set parsing 0
+            set -a _CDAI_QUERY "$arg"
+        end
+    end
+    return 0
+end`;
+var explicit2 = () => `function __cdai_explicit
+    for arg in $_CDAI_QUERY
+        if string match -qr '(^~|/)' -- "$arg"
+            return 0
+        end
+    end
+    return 1
+end`;
+var parser2 = () => `${flagDetection2()}
+
+${argumentParser()}
+
+${explicit2()}`;
 var jumper2 = () => `function cdai
-    if test (count $argv) -gt 0; and contains -- "$argv[1]" ${CLI_CONTROL_WORDS}
+    if test (count $argv) -gt 0; and contains -- "$argv[1]" --help -h --version -v
         __cdai_run $argv
         return $status
     end
-    builtin cd $argv 2>/dev/null
+    if test (count $argv) -gt 0; and contains -- "$argv[1]" ${CLI_CONTROL_WORDS}
+        if test (count $argv) -eq 1
+            cd "$argv[1]" 2>/dev/null
+            and return
+        end
+        __cdai_run $argv
+        return $status
+    end
+    cd $argv 2>/dev/null
     and return
-    set -l query $argv
-    if test (count $query) -gt 0; and test "$query[1]" = "--"
-        set -e query[1]
-    else if test (count $query) -gt 0; and string match -qr '^[-+]' -- "$query[1]"
-        builtin cd $argv
+    if not __cdai_parse $argv
+        cd $argv
         return $status
     end
-    if test (count $query) -eq 0; or string match -qr '(^~|/)' -- "$query[1]"
-        builtin cd $argv
+    if test (count $_CDAI_QUERY) -eq 0; or __cdai_explicit
+        cd $argv
         return $status
     end
-    set -l result (__cdai_run query -- $query)
+    set -l result (__cdai_run query -- $_CDAI_QUERY)
     or return $status
     if test -n "$result"
-        builtin cd -- "$result"
+        cd $_CDAI_CD_FLAGS -- "$result"
     end
 end`;
-var completer2 = () => `function __cdai_complete
-    set -l words (commandline -opc)
-    set -l current (commandline -ct)
-    if test -n "$current"
-        if test (count $words) -eq 0; or test "$words[-1]" != "$current"
-            set -a words "$current"
+var setupCompleter = () => `function __cdai_setup_complete
+    set -l previous ''
+    if test (count $argv) -gt 1
+        set previous $argv[-2]
+    end
+    switch "$previous"
+        case --root --remove-root
+            __fish_complete_directories "$argv[-1]"
+        case --depth
+            printf '%s\\n' 1 2 3 4 5 8 16 32 64
+        case '*'
+            printf '%s\\n' --yes --ai --no-ai --root --remove-root --depth --help
+    end
+end`;
+var managementCompleter2 = () => `${setupCompleter()}
+
+function __cdai_management_complete
+switch $argv[1]
+    case setup
+        __cdai_setup_complete $argv
+        return 0
+    case index
+        printf '%s\\n' --refresh --help
+        return 0
+    case alias
+        printf '%s\\n' list forget --help
+        return 0
+    case init
+        printf '%s\\n' zsh bash fish --help
+        return 0
+    case import
+        printf '%s\\n' zoxide --help
+        return 0
+    case doctor
+        printf '%s\\n' --help
+        return 0
+end
+return 1
+end`;
+var queryCompleter = () => `set -l option_position 1
+if test (count $query) -gt 1
+    for word in $query[1..-2]
+        if not string match -qr '^-[LP]+$' -- "$word"; and not contains -- "$word" --no-dereference --dereference
+            set option_position 0
         end
     end
+end
+if not __cdai_parse $query
+    return
+end
+if test $option_position -eq 1; and string match -qr '^-' -- "$current"; and not contains -- -- $query
+    printf '%s\\n' --
+    if test $_CDAI_FISH_CD_FLAGS -eq 1
+        printf '%s\\n' -L -P --no-dereference --dereference
+    end
+    return
+end
+__fish_complete_directories "$current"
+if functions -q __fish_complete_cd
+    __fish_complete_cd
+end
+if test (count $query) -le 1
+    printf '%s\\n' ${CLI_CONTROL_WORDS}
+end
+__cdai_run complete -- $_CDAI_QUERY 2>/dev/null`;
+var completer2 = () => `${managementCompleter2()}
+
+function __cdai_complete
+    set -l words (commandline -opc)
+    set -l current (commandline -ct)
+    if test -z "$current"
+        set -a words ""
+    else if test (count $words) -eq 0; or test "$words[-1]" != "$current"
+        set -a words "$current"
+    end
     set -l query $words[2..-1]
-    if test (count $query) -gt 0; and test "$query[1]" = "--"
-        set -e query[1]
-    else if test (count $query) -gt 0; and string match -qr '^[-+]' -- "$query[1]"
+    if test (count $query) -gt 0; and __cdai_management_complete $query
         return
     end
-    __cdai_run complete -- $query 2>/dev/null
+    ${queryCompleter()}
 end
-complete -c cdai -a '(__cdai_complete)'`;
+complete -c cdai -f -k -a '(__cdai_complete)'`;
 var fishInit = () => `# cdai shell integration (fish)
 if not set -q CDAI_DATA_DIR
     set -gx CDAI_DATA_DIR ${fishQuote(dataDir())}
@@ -1675,35 +2733,44 @@ end
 if not test -d "$CDAI_DATA_DIR"
     mkdir -p "$CDAI_DATA_DIR"
 end
+chmod 700 "$CDAI_DATA_DIR" 2>/dev/null
 
 ${recorder2()}
 
 ${runner2()}
 
+${parser2()}
+
 ${jumper2()}
 
 ${completer2()}
+
+${fishSmartTab()}
 `;
 
 // src/shell/zsh.ts
 var recorder3 = () => `__cdai_record() {
+  local previous_umask="$(umask)"
+  umask 077
   print -r -- "\${EPOCHSECONDS}"$'\\t'"\${PWD}" >> "$_CDAI_DATA/visits.log" 2>/dev/null
+  umask "$previous_umask"
 }
 add-zsh-hook chpwd __cdai_record`;
 var runner3 = () => `__cdai_run() {
   command \${=CDAI_BIN:-cdai} "$@"
 }`;
-var parser2 = () => `__cdai_parse() {
+var parser3 = () => `__cdai_parse() {
   typeset -ga _CDAI_CD_FLAGS _CDAI_QUERY
   _CDAI_CD_FLAGS=()
   _CDAI_QUERY=()
-  local arg parsing=1
+  local arg parsing=1 literal=0
   for arg in "$@"; do
     if (( parsing )) && [[ "$arg" == -- ]]; then
       parsing=0
+      literal=1
     elif (( parsing )) && [[ "$arg" =~ ^-[${ZSH_CD_FLAG_CHARS}]+$ ]]; then
       _CDAI_CD_FLAGS+=("$arg")
-    elif (( parsing )) && [[ "$arg" == [-+]* ]]; then
+    elif (( ! literal )) && [[ "$arg" == [-+]* ]]; then
       return 1
     else
       parsing=0
@@ -1711,19 +2778,41 @@ var parser2 = () => `__cdai_parse() {
     fi
   done
 }`;
+var explicit3 = () => `__cdai_explicit() {
+  local arg
+  for arg in "\${_CDAI_QUERY[@]}"; do
+    [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
+  done
+  return 1
+}`;
+var nativeError2 = () => `__cdai_native_error() {
+  local output result_status
+  output="$(builtin cd "$@" 2>&1)"
+  result_status=$?
+  output="\${output#*:cd: }"
+  [[ -n "$output" ]] && print -u2 -- "cdai: cd: $output"
+  return $result_status
+}`;
 var jumper3 = () => `cdai() {
+  if (( $# > 0 )) && [[ "$1" == (--help|-h|--version|-v) ]]; then
+    __cdai_run "$@"
+    return $?
+  fi
   if (( $# > 0 )) && [[ "$1" == (${CLI_CONTROL_PATTERN}) ]]; then
+    if (( $# == 1 )); then
+      builtin cd "$1" 2>/dev/null && return
+    fi
     __cdai_run "$@"
     return $?
   fi
   builtin cd "$@" 2>/dev/null && return
   if ! __cdai_parse "$@"; then
-    builtin cd "$@"
-    return
+    __cdai_native_error "$@"
+    return $?
   fi
-  if (( \${#_CDAI_QUERY} == 0 )) || [[ "\${_CDAI_QUERY[1]}" == */* || "\${_CDAI_QUERY[1]}" == '~'* ]]; then
-    builtin cd "$@"
-    return
+  if (( \${#_CDAI_QUERY} == 0 )) || __cdai_explicit; then
+    __cdai_native_error "$@"
+    return $?
   fi
   local result
   result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
@@ -1732,7 +2821,18 @@ var jumper3 = () => `cdai() {
 var completer3 = () => `__cdai_complete() {
   local service=cd
   local -a indexed
+  if (( CURRENT > 2 )); then
+    case "\${words[2]}" in
+      setup) _values 'setup option' --yes --ai --no-ai '--root[path]:directory:_directories' '--remove-root[path]:directory:_directories' '--depth[depth]:depth:' --help; return ;;
+      index) _values 'index option' --refresh --help; return ;;
+      alias) _values 'alias command' list forget --help; return ;;
+      init) _values 'shell' zsh bash fish --help; return ;;
+      import) _values 'source' zoxide --help; return ;;
+      doctor) _values 'doctor option' --help; return ;;
+    esac
+  fi
   _cd
+  (( CURRENT == 2 )) && compadd -- ${CLI_CONTROL_WORDS}
   if __cdai_parse "\${words[@]:1}"; then
     indexed=("\${(@f)$(__cdai_run complete -- "\${_CDAI_QUERY[@]}" 2>/dev/null)}")
   fi
@@ -1752,12 +2852,17 @@ autoload -Uz add-zsh-hook
 : \${CDAI_DATA_DIR:=${shellQuote(dataDir())}}
 typeset -g _CDAI_DATA=\${CDAI_DATA_DIR}
 [[ -d "$_CDAI_DATA" ]] || mkdir -p "$_CDAI_DATA"
+chmod 700 "$_CDAI_DATA" 2>/dev/null || true
 
 ${recorder3()}
 
 ${runner3()}
 
-${parser2()}
+${parser3()}
+
+${explicit3()}
+
+${nativeError2()}
 
 ${jumper3()}
 
@@ -1767,7 +2872,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.0",
+  version: "0.3.1",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {
@@ -1827,15 +2932,17 @@ var USAGE = [
   "  cdai <explicit/path>      native cd only; explicit paths are never guessed",
   "  cdai query -- <words>     resolve only, prints the path on stdout",
   "  cdai init <zsh|bash|fish> print the shell integration, meant for eval",
-  "  cdai setup [--yes] [--ai|--no-ai]",
-  "                            detect roots and choose optional AI fallback",
+  "  cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <n>]",
+  "             [--remove-root <path>]",
+  "                            configure roots and optional AI fallback",
   "  cdai index [--refresh]    show or rebuild the directory index",
   "  cdai import zoxide        seed frecency from an existing zoxide database",
+  "  cdai alias <list|forget>  inspect or correct confirmed local intent",
   "  cdai doctor               show what cdai sees on this machine",
   "  cdai --version",
   "",
   "shell behavior:",
-  "  Tab merges filesystem and cached indexed names without crawling or AI.",
+  "  Tab ranks filesystem, index, memory, context, and safe fuzzy intent without crawling or AI.",
   "  zsh/Bash cd flags such as -L and -P also compose with indexed intent.",
   "  Confirmed AI intent is remembered locally; disable AI with setup --no-ai."
 ].join("\n");
@@ -1844,17 +2951,26 @@ var INIT_TEMPLATES = {
   bash: bashInit,
   fish: fishInit
 };
-var runInit = (shell) => {
+var runInit = (args) => {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    note("usage: cdai init <zsh|bash|fish>");
+    return EXIT.ok;
+  }
+  const shell = args[0];
   const template = shell === void 0 ? void 0 : INIT_TEMPLATES[shell];
-  if (template === void 0) {
+  if (template === void 0 || args.length !== 1) {
     fail("unknown shell", "usage: cdai init <zsh|bash|fish>");
     return EXIT.error;
   }
   process.stdout.write(template());
   return EXIT.ok;
 };
-var runImport = (target) => {
-  if (target !== "zoxide") {
+var runImport = (args) => {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    note("usage: cdai import zoxide");
+    return EXIT.ok;
+  }
+  if (args.length !== 1 || args[0] !== "zoxide") {
     fail("unknown import source", "usage: cdai import zoxide");
     return EXIT.error;
   }
@@ -1863,6 +2979,13 @@ var runImport = (target) => {
 var queryArgs = (args) => {
   const rest = args.slice(1);
   return rest[0] === "--" ? rest.slice(1) : rest;
+};
+var runQueryCommand = async (args) => {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    note("usage: cdai query -- <words>");
+    return EXIT.ok;
+  }
+  return runQuery(args[0] === "--" ? args.slice(1) : args);
 };
 var dispatch = async (args) => {
   const command = args[0];
@@ -1874,17 +2997,19 @@ var dispatch = async (args) => {
     note(VERSION);
     return EXIT.ok;
   }
-  if (command === "init") return runInit(args[1]);
+  if (command === "init") return runInit(args.slice(1));
   if (command === "setup") return runSetup(args.slice(1));
   if (command === "index") return runIndex(args.slice(1));
-  if (command === "import") return runImport(args[1]);
-  if (command === "doctor") return runDoctor();
+  if (command === "import") return runImport(args.slice(1));
+  if (command === "alias") return runAlias(args.slice(1));
+  if (command === "doctor") return runDoctor(args.slice(1));
   if (command === "complete") return runComplete(queryArgs(args));
-  if (command === "query") return runQuery(queryArgs(args));
+  if (command === "query") return runQueryCommand(args.slice(1));
   return runQuery(args);
 };
 var main = async (argv) => {
   try {
+    secureExistingState();
     return await dispatch(argv);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));

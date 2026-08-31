@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
@@ -66,6 +66,15 @@ describe('buildIndex', () => {
     expect(entries.filter((e) => e.name === 'src')).toHaveLength(1);
   });
 
+  it('never follows a directory symlink beyond its configured root', () => {
+    const outside = join(fixture.rootDir, 'outside', 'private-client');
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(fixture.projects, 'escaped-client'));
+    const found = names();
+    expect(found).not.toContain('escaped-client');
+    expect(found).not.toContain('private-client');
+  });
+
   it('survives an unreadable directory', () => {
     const found = names();
     expect(found).toContain('locked');
@@ -82,6 +91,15 @@ describe('buildIndex', () => {
     const index = buildIndex(loadConfig(), 1);
     expect(index.generatedAt).toBe(1);
     expect(index.entries.length).toBeGreaterThan(0);
+  });
+
+  it('records entry and time truncation instead of reporting a complete crawl', () => {
+    const config = loadConfig();
+    const entries = buildIndex(config, Date.now(), { maxEntries: 1, maxWalkMs: 5000 });
+    expect(entries.entries).toHaveLength(1);
+    expect(entries.truncated).toBe('entries');
+    const time = buildIndex(config, Date.now(), { maxEntries: 50_000, maxWalkMs: -1 });
+    expect(time.truncated).toBe('time');
   });
 });
 
@@ -117,6 +135,31 @@ describe('index persistence', () => {
       JSON.stringify({ version: 1, generatedAt: Date.now(), entries: [] }),
     );
     expect(matchesConfig(loadIndex(), config)).toBe(false);
+  });
+
+  it('migrates a v2 cache in place without crawling configured roots', () => {
+    const config = loadConfig();
+    const current = refreshIndex(config);
+    const previous = {
+      ...current,
+      version: 2,
+      entries: current.entries.map(({ realPath: _realPath, ...entry }) => entry),
+    };
+    writeFileSync(join(fixture.dataDir, 'index.json'), JSON.stringify(previous));
+    const migrated = loadIndex();
+    expect(matchesConfig(migrated, config)).toBe(true);
+    expect(migrated.entries.find((entry) => entry.name === 'goalmap')?.realPath)
+      .toBe(realpathSync(join(fixture.projects, 'goalmap')));
+    const stored = JSON.parse(readFileSync(join(fixture.dataDir, 'index.json'), 'utf8')) as { version: number };
+    expect(stored.version).toBe(3);
+  });
+
+  it('rejects future index schemas instead of relabeling them as current', () => {
+    writeFileSync(
+      join(fixture.dataDir, 'index.json'),
+      JSON.stringify({ version: 999, generatedAt: Date.now(), configKey: 'trusted?', entries: [] }),
+    );
+    expect(loadIndex()).toEqual(emptyIndex());
   });
 
   it('treats a future cache timestamp as stale after clock skew', () => {

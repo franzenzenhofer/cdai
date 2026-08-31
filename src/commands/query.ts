@@ -7,8 +7,8 @@ import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
 import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import { absolutize, contractTilde, isUnder } from '../paths.js';
-import { confirm, pick, toItems } from '../picker.js';
+import { absolutize, contractTilde, isProtocolSafePath, isUnder } from '../paths.js';
+import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
 import { findAlias, forgetAlias, rememberAlias } from '../store/aliases.js';
@@ -45,6 +45,10 @@ const suggest = (ranked: readonly ScoredCandidate[], raw: string): ExitCode => {
 };
 
 const jumpKnown = (path: string): ExitCode => {
+  if (!isProtocolSafePath(path)) {
+    fail('matched path contains a line break unsupported by shell transport');
+    return EXIT.error;
+  }
   jump(path);
   return EXIT.ok;
 };
@@ -76,10 +80,16 @@ const acceptAi = (
   return jumpKnown(outcome.path);
 };
 
+const declineHeadlessAi = (): ExitCode => {
+  note('cdai: AI confirmation requires a terminal [no terminal, declined]');
+  return EXIT.noCd;
+};
+
 const aiTier = async (strict: readonly ScoredCandidate[], context: QueryContext): Promise<ExitCode> => {
   const { ai } = context.config;
   const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
   if (!ai.enabled) return suggest(ranked, context.query.raw);
+  if (!hasTty()) return declineHeadlessAi();
   const request = buildAiRequest({
     query: context.query.raw,
     cwd: process.cwd(),
@@ -135,7 +145,7 @@ interface IndexState {
 
 const freshIndex = (config: Config): IndexState => {
   const index = loadIndex();
-  if (index.entries.length > 0 && matchesConfig(index, config)) return { index, refreshed: false };
+  if (matchesConfig(index, config)) return { index, refreshed: false };
   return { index: refreshIndex(config), refreshed: true };
 };
 

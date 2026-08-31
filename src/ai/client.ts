@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { aiArgs, type AiBackend } from './backend.js';
+import type { AiBackend } from './backend.js';
+import { runAiCommand } from './process.js';
 
-const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_JSON_CANDIDATES = 32;
 const MAX_ENVELOPE_DEPTH = 6;
 const MAX_REASON_LENGTH = 120;
@@ -118,37 +117,6 @@ export const parseAiAnswer = (raw: string): AiAnswer | null => {
   return null;
 };
 
-const runCommand = (backend: AiBackend, prompt: string, timeoutMs: number): Promise<string> =>
-  new Promise((resolveOutput, reject) => {
-    const child = spawn(backend.command, aiArgs(backend, prompt), {
-      env: { ...process.env, NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    let output = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(new Error(`${backend.kind} timed out after ${String(timeoutMs)}ms`));
-    }, timeoutMs);
-    const finish = (error: Error | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error === null) resolveOutput(output);
-      else reject(error);
-    };
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      if (settled) return;
-      output += chunk;
-      if (Buffer.byteLength(output) <= MAX_OUTPUT_BYTES) return;
-      child.kill();
-      finish(new Error(`${backend.kind} output exceeded 1 MiB`));
-    });
-    child.on('error', finish);
-    child.on('close', (code) =>
-      finish(code === 0 ? null : new Error(`${backend.kind} exited with ${String(code)}`)));
-  });
-
 const isDirectory = (path: string): boolean => {
   try {
     return statSync(path).isDirectory();
@@ -188,7 +156,7 @@ export const askAi = async (
   if (request.candidates.length === 0) return { kind: 'none', why: 'no candidates' };
   let raw: string;
   try {
-    raw = await runCommand(backend, request.prompt, timeoutMs);
+    raw = await runAiCommand(backend, request.prompt, timeoutMs);
   } catch (error) {
     return { kind: 'none', why: error instanceof Error ? error.message : 'ai backend failed' };
   }

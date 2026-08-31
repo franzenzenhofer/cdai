@@ -74,7 +74,7 @@ describe('resolveQuery', () => {
     const yearFolder = `${fixture.clients}/petalworks/petalworks-2026`;
     const decision = tokenizeThen(
       'latest petalworks folder',
-      withDb({ version: 1, records: [{ path: yearFolder, visits: 80, lastVisit: NOW_SECONDS }] }),
+      withDb({ ...emptyDb(), records: [{ path: yearFolder, visits: 80, lastVisit: NOW_SECONDS }] }),
     );
     expect(decision.kind === 'hit' && decision.path).toBe(yearFolder);
   });
@@ -110,16 +110,29 @@ describe('resolveQuery', () => {
     const hot = `${fixture.projects}/tabletop-web`;
     const decision = run(
       'tictac',
-      withDb({ version: 1, records: [{ path: hot, visits: 40, lastVisit: NOW_SECONDS }] }),
+      withDb({ ...emptyDb(), records: [{ path: hot, visits: 40, lastVisit: NOW_SECONDS }] }),
     );
     expect(decision.kind === 'hit' && decision.path).toBe(hot);
+  });
+
+  it('never lets frecency promote a prefix above an exact name', () => {
+    const exact = join(fixture.projects, 'alpha');
+    const prefix = join(fixture.clients, 'alphabet');
+    mkdirSync(exact);
+    mkdirSync(prefix);
+    const indexed = { ...input, index: buildIndex(loadConfig()) };
+    const decision = tokenizeThen('alpha', {
+      ...indexed,
+      db: { ...emptyDb(), records: [{ path: prefix, visits: 1000, lastVisit: NOW_SECONDS }] },
+    });
+    expect(decision.kind === 'hit' && decision.path).toBe(exact);
   });
 
   it('finds a remembered path that is outside every root', () => {
     const outside = '/private/var/somewhere/gadgetron';
     const decision = run(
       'gadgetron',
-      withDb({ version: 1, records: [{ path: outside, visits: 3, lastVisit: NOW_SECONDS }] }),
+      withDb({ ...emptyDb(), records: [{ path: outside, visits: 3, lastVisit: NOW_SECONDS }] }),
     );
     expect(decision.kind === 'hit' && decision.path).toBe(outside);
   });

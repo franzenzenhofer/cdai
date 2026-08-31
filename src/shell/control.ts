@@ -5,6 +5,7 @@ export const CLI_CONTROLS = [
   'index',
   'import',
   'doctor',
+  'alias',
   'query',
   'complete',
   '--help',
@@ -18,6 +19,7 @@ export const CLI_CONTROL_WORDS = CLI_CONTROLS.join(' ');
 
 export const ZSH_CD_FLAG_CHARS = 'qLsP';
 export const BASH_CD_FLAG_CHARS = 'LPe@';
+export const BASH_PORTABLE_CD_FLAG_CHARS = 'LP';
 const CD_FLAG = new RegExp(`^-[${ZSH_CD_FLAG_CHARS}${BASH_CD_FLAG_CHARS}]+$`);
 
 /** Removes recognized leading cd options so cached completion ranks only the user's intent. */

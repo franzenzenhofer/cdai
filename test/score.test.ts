@@ -29,6 +29,12 @@ describe('matchName', () => {
   it('is case insensitive', () => {
     expect(matchName('squash', 'SQUASH')).toBe(SCORE.exact);
   });
+
+  it('recognizes bounded substitutions and transpositions below literal classes', () => {
+    expect(matchName('petla', 'petalworks')).toBeGreaterThan(SCORE.none);
+    expect(matchName('sqush', 'squash')).toBeGreaterThan(SCORE.none);
+    expect(matchName('petla', 'petalworks')).toBeLessThan(SCORE.substring);
+  });
 });
 
 describe('fuzzyScore', () => {

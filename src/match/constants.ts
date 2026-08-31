@@ -46,6 +46,12 @@ export const THRESHOLD = {
   minPickerCandidates: 2,
 } as const;
 
+export const COMPLETION = {
+  /** Short fuzzy fragments create noisy, destructive shell replacements. */
+  minSmartLength: 3,
+  maxTypoLength: 64,
+} as const;
+
 export const LIMIT = {
   /** Candidates offered to the picker. */
   picker: 10,

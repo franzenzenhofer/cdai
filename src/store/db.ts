@@ -1,125 +1,144 @@
-import { existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { tryReadJson } from '../json.js';
-import { dataDir, dbFile, visitsLog, writeAtomic, ensureDir } from '../paths.js';
+import { dbFile, writeAtomic } from '../paths.js';
 import { applyAging, needsAging, type VisitRecord } from './frecency.js';
+import { withStateLock } from './lock.js';
+import { boundedRecords, canonicalPath, canonicalRecords, readVisitRecord } from './db-records.js';
+import {
+  claimLogs,
+  legacyClaimOffsets,
+  readClaimBatch,
+  readClaimOffsets,
+  retireSettledClaims,
+  type ClaimOffsets,
+  type Visit,
+} from './visit-claims.js';
+export { parseVisitLines, type Visit } from './visit-claims.js';
+export { MAX_DB_RECORDS } from './db-records.js';
 
-const DB_VERSION = 1;
-const INGEST_PREFIX = 'visits.log.ingest.';
-const FIELD_SEPARATOR = '\t';
+const DB_VERSION = 3;
+const LEGACY_DB_VERSION = 1;
+const PREVIOUS_DB_VERSION = 2;
 const VISIT_INCREMENT = 1;
 
 export interface Db {
   readonly version: number;
   readonly records: readonly VisitRecord[];
+  /** Byte offsets durably applied from pending logs; prevents loss and replay around shell appends. */
+  readonly claimOffsets: ClaimOffsets;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const readVisitRecord = (value: unknown): VisitRecord | undefined => {
-  if (!isRecord(value)) return undefined;
-  const { path, visits, lastVisit } = value;
-  if (typeof path !== 'string' || !isAbsolute(path)) return undefined;
-  if (typeof visits !== 'number' || !Number.isFinite(visits) || visits <= 0) return undefined;
-  if (typeof lastVisit !== 'number' || !Number.isFinite(lastVisit) || lastVisit < 0) return undefined;
-  return { path, visits, lastVisit };
-};
+export const emptyDb = (): Db => ({ version: DB_VERSION, records: [], claimOffsets: {} });
 
-export const emptyDb = (): Db => ({ version: DB_VERSION, records: [] });
-
-export const loadDb = (): Db => {
-  const file = dbFile();
-  if (!existsSync(file)) return emptyDb();
-  const parsed = tryReadJson(file);
-  if (!isRecord(parsed) || !Array.isArray(parsed['records'])) return emptyDb();
-  const records = parsed['records']
-    .map(readVisitRecord)
-    .filter((r): r is VisitRecord => r !== undefined);
-  return { version: DB_VERSION, records };
-};
-
-export const saveDb = (db: Db): void => {
-  writeAtomic(dbFile(), `${JSON.stringify({ version: DB_VERSION, records: db.records })}\n`);
-};
-
-export interface Visit {
-  readonly path: string;
-  readonly epoch: number;
+interface DbState {
+  readonly db: Db;
+  readonly migrated: boolean;
 }
 
-export const parseVisitLines = (contents: string): Visit[] => {
-  const visits: Visit[] = [];
-  for (const line of contents.split('\n')) {
-    if (line === '') continue;
-    const tab = line.indexOf(FIELD_SEPARATOR);
-    if (tab <= 0) continue;
-    const rawEpoch = line.slice(0, tab);
-    const epoch = /^\d+$/.test(rawEpoch) ? Number(rawEpoch) : Number.NaN;
-    const path = line.slice(tab + 1);
-    if (!Number.isSafeInteger(epoch) || epoch <= 0 || !isAbsolute(path)) continue;
-    visits.push({ path, epoch });
+const loadDbState = (): DbState => {
+  const file = dbFile();
+  if (!existsSync(file)) return { db: emptyDb(), migrated: false };
+  const parsed = tryReadJson(file);
+  if (!isRecord(parsed) || !Array.isArray(parsed['records'])) return { db: emptyDb(), migrated: false };
+  const version = parsed['version'];
+  if (version !== LEGACY_DB_VERSION && version !== PREVIOUS_DB_VERSION && version !== DB_VERSION) {
+    if (typeof version === 'number') throw new Error(`unsupported db schema version ${String(version)}; state was not modified`);
+    return { db: emptyDb(), migrated: false };
   }
-  return visits;
+  const rawRecords = parsed['records']
+    .map(readVisitRecord)
+    .filter((r): r is VisitRecord => r !== undefined);
+  const records = canonicalRecords(rawRecords);
+  return {
+    db: {
+      version: DB_VERSION,
+      records,
+      claimOffsets: version === DB_VERSION
+        ? readClaimOffsets(parsed['claimOffsets'])
+        : legacyClaimOffsets(parsed['appliedClaims']),
+    },
+    migrated: version !== DB_VERSION
+      || rawRecords.some((record) => record.realPath === undefined)
+      || records.length !== rawRecords.length,
+  };
 };
 
-/**
- * Rename-then-ingest: the live log is moved aside under a pid-unique name before it is read,
- * so a shell appending concurrently never loses a line and two cdai runs never double count.
- * Leftovers from a crashed run are picked up on the next call.
- */
-const claimLogs = (): string[] => {
-  const dir = dataDir();
-  ensureDir(dir);
-  const live = visitsLog();
-  if (existsSync(live)) {
-    const claimed = join(dir, `${INGEST_PREFIX}${process.pid}.${Date.now()}`);
-    try {
-      renameSync(live, claimed);
-    } catch {
-      return pendingLogs(dir);
-    }
-  }
-  return pendingLogs(dir);
+export const loadDb = (): Db => loadDbState().db;
+
+const saveDbUnlocked = (db: Db): void => {
+  writeAtomic(
+    dbFile(),
+    `${JSON.stringify({
+      version: DB_VERSION,
+      records: canonicalRecords(db.records),
+      claimOffsets: db.claimOffsets,
+    })}\n`,
+  );
 };
 
-const pendingLogs = (dir: string): string[] =>
-  readdirSync(dir)
-    .filter((name) => name.startsWith(INGEST_PREFIX))
-    .map((name) => join(dir, name));
+export const saveDb = (db: Db): void => withStateLock(dbFile(), () => saveDbUnlocked(db));
 
 export const mergeVisits = (db: Db, visits: readonly Visit[]): Db => {
-  const byPath = new Map<string, VisitRecord>(db.records.map((r) => [r.path, r]));
+  const byPath = new Map<string, VisitRecord>(canonicalRecords(db.records).map((r) => [r.realPath ?? r.path, r]));
+  const canonical = new Map<string, string>();
   for (const visit of visits) {
-    const existing = byPath.get(visit.path);
-    byPath.set(visit.path, {
-      path: visit.path,
+    let realPath = canonical.get(visit.path);
+    if (realPath === undefined) {
+      realPath = canonicalPath(visit.path);
+      canonical.set(visit.path, realPath);
+    }
+    const existing = byPath.get(realPath);
+    byPath.set(realPath, {
+      path: existing?.path ?? visit.path,
+      realPath,
       visits: (existing?.visits ?? 0) + VISIT_INCREMENT,
       lastVisit: Math.max(existing?.lastVisit ?? 0, visit.epoch),
     });
   }
-  const records = [...byPath.values()];
-  return { version: DB_VERSION, records: needsAging(records) ? applyAging(records) : records };
+  const records = boundedRecords([...byPath.values()]);
+  return {
+    version: DB_VERSION,
+    records: needsAging(records) ? applyAging(records) : records,
+    claimOffsets: db.claimOffsets,
+  };
 };
 
-/** Ingests pending visit logs and returns the up to date db, persisting only when something changed. */
-export const ingest = (): Db => {
+const ingestLocked = (): Db => {
   const logs = claimLogs();
-  const db = loadDb();
-  if (logs.length === 0) return db;
-  const visits: Visit[] = [];
-  for (const log of logs) {
-    visits.push(...parseVisitLines(readFileSync(log, 'utf8')));
-    rmSync(log, { force: true });
+  const loaded = loadDbState();
+  let db = loaded.db;
+  if (logs.length === 0) {
+    if (loaded.migrated) saveDbUnlocked(db);
+    return db;
   }
-  if (visits.length === 0) return db;
-  const merged = mergeVisits(db, visits);
-  saveDb(merged);
-  return merged;
+  const batch = readClaimBatch(logs, db.claimOffsets);
+  const merged = mergeVisits(db, batch.visits);
+  db = { ...merged, claimOffsets: batch.offsets };
+  // Applied byte offsets and merged records land together before any settled log is retired.
+  saveDbUnlocked(db);
+  const offsets = retireSettledClaims(logs, batch);
+  const cleaned = { ...db, claimOffsets: offsets };
+  if (Object.keys(offsets).length !== Object.keys(db.claimOffsets).length) saveDbUnlocked(cleaned);
+  return cleaned;
 };
+
+/** Serializes claim -> merge -> durable save -> retire, so parallel queries cannot lose visits. */
+export const ingest = (): Db => withStateLock(dbFile(), ingestLocked);
 
 export const recordVisit = (path: string, epoch: number): Db => {
-  const merged = mergeVisits(ingest(), [{ path, epoch }]);
-  saveDb(merged);
-  return merged;
+  return withStateLock(dbFile(), () => {
+    const merged = mergeVisits(ingestLocked(), [{ path, epoch }]);
+    saveDbUnlocked(merged);
+    return merged;
+  });
 };
+
+export const updateDb = (update: (db: Db) => Db): Db =>
+  withStateLock(dbFile(), () => {
+    const next = update(ingestLocked());
+    saveDbUnlocked(next);
+    return next;
+  });

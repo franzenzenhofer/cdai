@@ -1,3 +1,4 @@
+import { runAlias } from './commands/alias.js';
 import { runDoctor } from './commands/doctor.js';
 import { runComplete } from './commands/complete.js';
 import { runImportZoxide } from './commands/import-zoxide.js';
@@ -8,6 +9,7 @@ import { EXIT, fail, note, type ExitCode } from './protocol.js';
 import { bashInit } from './shell/bash.js';
 import { fishInit } from './shell/fish.js';
 import { zshInit } from './shell/zsh.js';
+import { secureExistingState } from './paths.js';
 import packageJson from '../package.json' with { type: 'json' };
 
 export const VERSION = packageJson.version;
@@ -20,15 +22,17 @@ const USAGE = [
   '  cdai <explicit/path>      native cd only; explicit paths are never guessed',
   '  cdai query -- <words>     resolve only, prints the path on stdout',
   '  cdai init <zsh|bash|fish> print the shell integration, meant for eval',
-  '  cdai setup [--yes] [--ai|--no-ai]',
-  '                            detect roots and choose optional AI fallback',
+  '  cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <n>]',
+  '             [--remove-root <path>]',
+  '                            configure roots and optional AI fallback',
   '  cdai index [--refresh]    show or rebuild the directory index',
   '  cdai import zoxide        seed frecency from an existing zoxide database',
+  '  cdai alias <list|forget>  inspect or correct confirmed local intent',
   '  cdai doctor               show what cdai sees on this machine',
   '  cdai --version',
   '',
   'shell behavior:',
-  '  Tab merges filesystem and cached indexed names without crawling or AI.',
+  '  Tab ranks filesystem, index, memory, context, and safe fuzzy intent without crawling or AI.',
   '  zsh/Bash cd flags such as -L and -P also compose with indexed intent.',
   '  Confirmed AI intent is remembered locally; disable AI with setup --no-ai.',
 ].join('\n');
@@ -39,9 +43,14 @@ const INIT_TEMPLATES: Record<string, () => string> = {
   fish: fishInit,
 };
 
-const runInit = (shell: string | undefined): ExitCode => {
+const runInit = (args: readonly string[]): ExitCode => {
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    note('usage: cdai init <zsh|bash|fish>');
+    return EXIT.ok;
+  }
+  const shell = args[0];
   const template = shell === undefined ? undefined : INIT_TEMPLATES[shell];
-  if (template === undefined) {
+  if (template === undefined || args.length !== 1) {
     fail('unknown shell', 'usage: cdai init <zsh|bash|fish>');
     return EXIT.error;
   }
@@ -49,8 +58,12 @@ const runInit = (shell: string | undefined): ExitCode => {
   return EXIT.ok;
 };
 
-const runImport = (target: string | undefined): ExitCode => {
-  if (target !== 'zoxide') {
+const runImport = (args: readonly string[]): ExitCode => {
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    note('usage: cdai import zoxide');
+    return EXIT.ok;
+  }
+  if (args.length !== 1 || args[0] !== 'zoxide') {
     fail('unknown import source', 'usage: cdai import zoxide');
     return EXIT.error;
   }
@@ -63,6 +76,14 @@ const queryArgs = (args: readonly string[]): string[] => {
   return rest[0] === '--' ? rest.slice(1) : rest;
 };
 
+const runQueryCommand = async (args: readonly string[]): Promise<ExitCode> => {
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    note('usage: cdai query -- <words>');
+    return EXIT.ok;
+  }
+  return runQuery(args[0] === '--' ? args.slice(1) : args);
+};
+
 const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
   const command = args[0];
   if (command === undefined || command === '--help' || command === '-h') {
@@ -73,18 +94,20 @@ const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
     note(VERSION);
     return EXIT.ok;
   }
-  if (command === 'init') return runInit(args[1]);
+  if (command === 'init') return runInit(args.slice(1));
   if (command === 'setup') return runSetup(args.slice(1));
   if (command === 'index') return runIndex(args.slice(1));
-  if (command === 'import') return runImport(args[1]);
-  if (command === 'doctor') return runDoctor();
+  if (command === 'import') return runImport(args.slice(1));
+  if (command === 'alias') return runAlias(args.slice(1));
+  if (command === 'doctor') return runDoctor(args.slice(1));
   if (command === 'complete') return runComplete(queryArgs(args));
-  if (command === 'query') return runQuery(queryArgs(args));
+  if (command === 'query') return runQueryCommand(args.slice(1));
   return runQuery(args);
 };
 
 export const main = async (argv: readonly string[]): Promise<ExitCode> => {
   try {
+    secureExistingState();
     return await dispatch(argv);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
