@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
+import { tryReadJson } from '../json.js';
 import { dataDir, dbFile, visitsLog, writeAtomic, ensureDir } from '../paths.js';
 import { applyAging, needsAging, type VisitRecord } from './frecency.js';
 
@@ -19,8 +20,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const readVisitRecord = (value: unknown): VisitRecord | undefined => {
   if (!isRecord(value)) return undefined;
   const { path, visits, lastVisit } = value;
-  if (typeof path !== 'string' || path === '') return undefined;
-  if (typeof visits !== 'number' || typeof lastVisit !== 'number') return undefined;
+  if (typeof path !== 'string' || !isAbsolute(path)) return undefined;
+  if (typeof visits !== 'number' || !Number.isFinite(visits) || visits <= 0) return undefined;
+  if (typeof lastVisit !== 'number' || !Number.isFinite(lastVisit) || lastVisit < 0) return undefined;
   return { path, visits, lastVisit };
 };
 
@@ -29,7 +31,7 @@ export const emptyDb = (): Db => ({ version: DB_VERSION, records: [] });
 export const loadDb = (): Db => {
   const file = dbFile();
   if (!existsSync(file)) return emptyDb();
-  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  const parsed = tryReadJson(file);
   if (!isRecord(parsed) || !Array.isArray(parsed['records'])) return emptyDb();
   const records = parsed['records']
     .map(readVisitRecord)
@@ -52,9 +54,10 @@ export const parseVisitLines = (contents: string): Visit[] => {
     if (line === '') continue;
     const tab = line.indexOf(FIELD_SEPARATOR);
     if (tab <= 0) continue;
-    const epoch = Number.parseInt(line.slice(0, tab), 10);
+    const rawEpoch = line.slice(0, tab);
+    const epoch = /^\d+$/.test(rawEpoch) ? Number(rawEpoch) : Number.NaN;
     const path = line.slice(tab + 1);
-    if (!Number.isFinite(epoch) || path === '') continue;
+    if (!Number.isSafeInteger(epoch) || epoch <= 0 || !isAbsolute(path)) continue;
     visits.push({ path, epoch });
   }
   return visits;

@@ -1,4 +1,5 @@
 import { runDoctor } from './commands/doctor.js';
+import { runComplete } from './commands/complete.js';
 import { runImportZoxide } from './commands/import-zoxide.js';
 import { runIndex } from './commands/index-cmd.js';
 import { runQuery } from './commands/query.js';
@@ -7,8 +8,9 @@ import { EXIT, fail, note, type ExitCode } from './protocol.js';
 import { bashInit } from './shell/bash.js';
 import { fishInit } from './shell/fish.js';
 import { zshInit } from './shell/zsh.js';
+import packageJson from '../package.json' with { type: 'json' };
 
-export const VERSION = '0.1.0';
+export const VERSION = packageJson.version;
 
 const USAGE = [
   'cdai - cd with intent',
@@ -69,6 +71,7 @@ const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
   if (command === 'index') return runIndex(args.slice(1));
   if (command === 'import') return runImport(args[1]);
   if (command === 'doctor') return runDoctor();
+  if (command === 'complete') return runComplete(queryArgs(args));
   if (command === 'query') return runQuery(queryArgs(args));
   return runQuery(args);
 };

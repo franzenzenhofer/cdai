@@ -2,7 +2,8 @@
 
 A directory jumper that indexes folders you have **never visited**, understands
 `latest`, `oldest` and year filters deterministically, and only asks an LLM when its own
-matcher admits it is unsure.
+matcher admits it is unsure. It auto-detects Apfel, Claude and Gemini, supports Ollama and
+arbitrary one-shot AI CLIs, and keeps the fast path completely model-free.
 
 The AI tier cannot invent a path. It picks from a list, or it declines. More on that below,
 because it is the only genuinely interesting thing in here.
@@ -18,15 +19,14 @@ $ cdai petalworks 2025
 → ~/Dropbox/clients/petalworks/petalworks-2025
 
 $ cdai that client with the flowers
-cdai: thinking... (claude sonnet)
+cdai: thinking... (apfel)
 cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/n]
 → ~/Dropbox/clients/petalworks
 ```
 
-Every one of those is real output, produced by running the binary against the tree that
-`docs/demo-fixture.sh` builds. Reproduce it yourself with
-`sh docs/demo-fixture.sh && vhs docs/demo.tape`. The last one additionally needs that client in
-your history - see below for why, and for what it prints when it is not.
+The deterministic cases are reproducible against the tree from `docs/demo-fixture.sh`; record
+the included terminal demo with `sh docs/demo-fixture.sh && vhs docs/demo.tape`. The AI example
+additionally needs that client in history - see below for why, and what happens when it is not.
 
 ![cdai demo](docs/demo.gif)
 
@@ -55,21 +55,21 @@ class candidate. Frecency then reorders what the index found.
 An LLM that picks your working directory is a terrible idea if it can emit arbitrary strings.
 So it cannot. Tier 2 gets a closed list - the top 30 fuzzy candidates plus your 20 most frecent
 paths - and the reply contract is one JSON object naming a path **from that list**. The answer
-is then re-checked: it must exist on disk *and* live under a configured root, or it is thrown
-away.
+is then re-checked against that exact list and the filesystem. cdai emits its original trusted
+candidate, never the model's spelling of the path. An existing but unoffered directory is still
+rejected.
 
 That makes the failure mode boring on purpose. Two measured runs of the same query:
 
 ```console
 # frecency db empty, no fuzzy candidates -> nothing to choose from
 $ cdai that client with the flowers
-cdai: thinking... (claude sonnet)
-cdai: ai had no usable answer (no candidates provided to match)
 cdai: no match for "that client with the flowers"
+      try `cdai index --refresh`, or add a root with `cdai setup`
 
 # same query, after petalworks is in the history
 $ cdai that client with the flowers
-cdai: thinking... (claude sonnet)
+cdai: thinking... (apfel)
 cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/n]
 ```
 
@@ -119,9 +119,9 @@ Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
       and gap >= 200│  >= 400              │
                     ▼         ▼            ▼
                ┌────────┐ ┌────────┐ ┌──────────────────────┐
-               │  jump  │ │ picker │ │ tier 2: ai (optional)│ claude -p, 45s cap,
-               │  exit 0│ │  fzf   │ │ answer must exist    │ answer validated against
-               └────┬───┘ └───┬────┘ └──────────┬───────────┘ the index before use
+               │  jump  │ │ picker │ │ tier 2: ai (optional)│ Apfel/Claude/Gemini/Ollama,
+               │  exit 0│ │  fzf   │ │ exact offered path   │ 45s cap, bounded output,
+               └────┬───┘ └───┬────┘ └──────────┬───────────┘ validated before use
                     ▼         ▼                 ▼
               stdout: /the/path        stderr: → ~/the/path
 ```
@@ -157,20 +157,63 @@ exec zsh
 bash: `eval "$(cdai init bash)"` in `~/.bashrc`. fish: `cdai init fish | source` in
 `~/.config/fish/config.fish`. Coming from zoxide? `cdai import zoxide` seeds your frecency.
 
-## Turning the AI off entirely
+The shell integration keeps native `cd` behavior first, including options such as `-L` and
+`-P`, `cd -`, and zsh's `cd old new` substitution. If native `cd` cannot handle the arguments,
+cdai treats them as intent. Tab completion combines normal filesystem directories with cached
+indexed names; it never invokes AI, opens a picker, or crawls the filesystem.
+
+On Apple Silicon with macOS 26+, `brew install apfel` adds a fast, private, on-device fallback.
+It needs Apple Intelligence enabled, but no API key or model download beyond Apple's system
+model.
+
+## AI backends
+
+The default `"command": "auto"` chooses the first installed backend in this order:
+
+1. `apfel` - Apple's on-device Foundation Model; no model setting needed.
+2. `claude` - Claude Code in print mode; defaults to `sonnet`.
+3. `gemini` - Gemini CLI in headless mode; uses its configured default model.
+
+Ollama is deliberately not guessed because cdai cannot know which local model you want. Select
+it with a model name:
+
+```json
+{ "ai": { "enabled": true, "command": "ollama", "model": "qwen3:4b", "timeoutMs": 45000 } }
+```
+
+To pin a built-in backend, set `command` to `apfel`, `claude`, or `gemini`. Existing Claude
+configs keep working unchanged. `args` adds backend-specific flags without invoking a shell.
+
+Any other one-shot CLI also works. `command` is the executable name or path; each `args` entry
+is one argument. `{prompt}` and `{model}` placeholders are expanded in place, and the prompt is
+appended when `{prompt}` is absent:
+
+```json
+{
+  "ai": {
+    "enabled": true,
+    "command": "my-ai",
+    "args": ["run", "--model", "{model}", "--prompt", "{prompt}"],
+    "model": "small",
+    "timeoutMs": 45000
+  }
+}
+```
+
+cdai understands bare model JSON and the response envelopes emitted by Apfel, Claude, Gemini,
+and OpenAI-compatible tools. Backend output is capped at 1 MiB, calls time out, control text is
+removed from displayed reasons, and every failure falls back to deterministic suggestions.
+
+### Turning AI off entirely
 
 Set `ai.enabled` to `false` in `~/.config/cdai/config.json` and cdai is a fast fuzzy jumper with
 frecency and operators, nothing else. Tier 1 makes no network call, ever, under any
-configuration. All 107 tests pass with no AI backend on `PATH` at all - the tier 2 tests drive
+configuration. All 130 tests pass with no AI backend on `PATH` at all - the tier 2 tests drive
 executable shim scripts, so cloning this repo never spends a token.
 
-When it is on, what leaves your machine is: the words you typed, your cwd, and up to 50
-directory **paths** (no file contents, ever). `ai.command` is just a command line, so any
-prompt capable CLI works:
-
-```json
-{ "ai": { "enabled": true, "command": "claude", "model": "sonnet", "timeoutMs": 45000 } }
-```
+The chosen backend receives the words you typed, your cwd, and up to 50 in-root directory
+**paths** - never file contents. With Apfel or Ollama that stays local; cloud-backed CLIs apply
+their own privacy and billing policies.
 
 ## Configuration
 
@@ -183,7 +226,7 @@ prompt capable CLI works:
     { "path": "/Users/you/Dropbox/clients", "depth": 3 }
   ],
   "ignore": ["node_modules", ".git", "dist", "build", ".venv"],
-  "ai": { "enabled": true, "command": "claude", "model": "sonnet", "timeoutMs": 45000 }
+  "ai": { "enabled": true, "command": "auto", "args": [], "model": "", "timeoutMs": 45000 }
 }
 ```
 
@@ -211,12 +254,12 @@ path and nothing else; every human readable byte goes to stderr.
 - **No Windows.** zsh, bash and fish on macOS and Linux.
 - **The index is a snapshot**, rebuilt on a miss or after 60 minutes. A folder created two
   minutes ago may need `cdai index --refresh`.
-- **Crawl depth is bounded** by your config. Deep monorepos need a deeper root, and a deeper
-  root means a bigger index.
+- **Crawl depth is bounded** by your config (and capped at 64). Deep monorepos need a deeper
+  root, and a deeper root means a bigger index.
 - **Tier 2 is seconds, not milliseconds**, and needs a working CLI backend. It is off the hot
   path by design, not by accident.
 - **No semantic search over unindexed directories.** See the section above.
-- **~1800 lines of TypeScript.** This is a small tool that does one thing, not a platform.
+- **~2500 lines of source TypeScript.** This is a small tool that does one thing, not a platform.
 
 ## Development
 
@@ -224,11 +267,11 @@ path and nothing else; every human readable byte goes to stderr.
 npm run typecheck && npm run lint && npm run test && npm run build
 ```
 
-107 tests, no mocking library, no fake filesystem. Fixtures are real temp trees containing
+130 tests, no mocking library, no fake filesystem. Fixtures are real temp trees containing
 spaces, unicode, symlinks, an unreadable directory and a `node_modules`. The AI tier is tested
 against real executable shim scripts. The shell integration is tested by running `zsh -f` and
 checking which directory it actually ended up in. Zero runtime dependencies; the build is a
-single 45KB `dist/cdai.js` from esbuild.
+single 56KB `dist/cdai.js` from esbuild.
 
 ## Prior art
 

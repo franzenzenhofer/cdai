@@ -1,13 +1,14 @@
 import { existsSync, statSync } from 'node:fs';
-import { askAi } from '../ai/claude.js';
-import { buildPrompt } from '../ai/prompt.js';
+import { backendLabel, resolveAiBackend } from '../ai/backend.js';
+import { askAi } from '../ai/client.js';
+import { buildAiRequest } from '../ai/prompt.js';
 import { loadConfig, type Config } from '../config.js';
 import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
 import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
 import { absolutize, contractTilde } from '../paths.js';
-import { confirm, findOnPath, pick, toItems } from '../picker.js';
+import { confirm, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
 import { isStale, loadIndex, refreshIndex, type DirIndex } from '../store/indexer.js';
@@ -42,26 +43,39 @@ const suggest = (ranked: readonly ScoredCandidate[], raw: string): ExitCode => {
   return EXIT.error;
 };
 
+const jumpExisting = (path: string): ExitCode => {
+  if (!isDirectory(path)) {
+    fail('matched directory no longer exists', 'run `cdai index --refresh`');
+    return EXIT.error;
+  }
+  jump(path);
+  return EXIT.ok;
+};
+
 const aiTier = async (strict: readonly ScoredCandidate[], context: QueryContext): Promise<ExitCode> => {
   const { ai } = context.config;
   const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
-  if (!ai.enabled) return suggest(strict, context.query.raw);
-  if (findOnPath(ai.command) === null) {
-    note(`cdai: ${ai.command} not on PATH, staying deterministic`);
-    return suggest(strict, context.query.raw);
-  }
-  note(`cdai: thinking... (${ai.command} ${ai.model})`);
-  const prompt = buildPrompt({
+  if (!ai.enabled) return suggest(ranked, context.query.raw);
+  const request = buildAiRequest({
     query: context.query.raw,
     cwd: process.cwd(),
     ranked,
     db: context.db,
     nowSeconds: context.nowSeconds,
+    roots: context.config.roots.map((root) => root.path),
   });
-  const outcome = await askAi(prompt, context.config);
+  if (request.candidates.length === 0) return suggest(ranked, context.query.raw);
+  const backend = resolveAiBackend(ai);
+  if (backend === null) {
+    const label = ai.command === 'auto' ? 'no supported AI backend found' : `${ai.command} unavailable`;
+    note(`cdai: ${label}, staying deterministic`);
+    return suggest(ranked, context.query.raw);
+  }
+  note(`cdai: thinking... (${backendLabel(backend)})`);
+  const outcome = await askAi(request, backend, ai.timeoutMs);
   if (outcome.kind === 'none') {
     note(`cdai: ai had no usable answer (${outcome.why})`);
-    return suggest(strict, context.query.raw);
+    return suggest(ranked, context.query.raw);
   }
   const label = outcome.reason === '' ? '' : ` (${outcome.reason})`;
   if (!confirm(`cdai: ${contractTilde(outcome.path)}${label}`)) return EXIT.noCd;
@@ -70,15 +84,11 @@ const aiTier = async (strict: readonly ScoredCandidate[], context: QueryContext)
 };
 
 const finish = async (decision: Decision, context: QueryContext): Promise<ExitCode> => {
-  if (decision.kind === 'hit') {
-    jump(decision.path);
-    return EXIT.ok;
-  }
+  if (decision.kind === 'hit') return jumpExisting(decision.path);
   if (decision.kind === 'choose') {
     const chosen = pick(toItems(decision.candidates.map((c) => c.candidate.path)));
     if (chosen === null) return EXIT.noCd;
-    jump(chosen);
-    return EXIT.ok;
+    return jumpExisting(chosen);
   }
   return aiTier(decision.candidates, context);
 };

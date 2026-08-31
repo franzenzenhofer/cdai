@@ -31,7 +31,11 @@ describe('parseVisitLines', () => {
   });
 
   it('skips blank and malformed lines instead of failing the run', () => {
-    expect(parseVisitLines('\nnonsense\n\t/no-epoch\n1700000000\t\n')).toEqual([]);
+    expect(
+      parseVisitLines(
+        '\nnonsense\n\t/no-epoch\n12junk\t/partial\n-1\t/negative\n1700000000\trelative\n1700000000\t\n',
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -70,7 +74,15 @@ describe('ingest', () => {
   });
 
   it('survives a corrupt db by ignoring unusable records', () => {
-    writeFileSync(join(dataDir, 'db.json'), JSON.stringify({ records: [{ path: 5 }, 'junk'] }));
+    writeFileSync(
+      join(dataDir, 'db.json'),
+      JSON.stringify({ records: [{ path: 5 }, { path: 'relative', visits: 1, lastVisit: 1 }, 'junk'] }),
+    );
+    expect(loadDb().records).toEqual([]);
+  });
+
+  it('treats malformed JSON as an empty recoverable cache', () => {
+    writeFileSync(join(dataDir, 'db.json'), '{partial');
     expect(loadDb().records).toEqual([]);
   });
 });

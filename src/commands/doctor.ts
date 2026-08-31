@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
-import { configExists, loadConfig } from '../config.js';
+import { backendLabel, resolveAiBackend } from '../ai/backend.js';
+import { configExists, loadConfig, type AiConfig } from '../config.js';
+import { resolveExecutable } from '../executable.js';
 import { configFile, contractTilde, dataDir, dbFile, indexFile, visitsLog } from '../paths.js';
-import { findOnPath, hasTty } from '../picker.js';
+import { hasTty } from '../picker.js';
 import { EXIT, note, type ExitCode } from '../protocol.js';
 import { loadDb } from '../store/db.js';
 import { isStale, loadIndex } from '../store/indexer.js';
@@ -9,14 +11,23 @@ import { isStale, loadIndex } from '../store/indexer.js';
 const MILLIS_PER_MINUTE = 60_000;
 const mark = (ok: boolean): string => (ok ? 'ok  ' : 'miss');
 
+const reportAi = (ai: AiConfig): void => {
+  if (!ai.enabled) {
+    note('ai     disabled');
+    return;
+  }
+  const backend = resolveAiBackend(ai);
+  note(`ai     enabled via ${backend === null ? ai.command : backendLabel(backend)}`);
+  note(`  ${mark(backend !== null)} ${backend?.command ?? 'supported backend'} available`);
+};
+
 const reportRoots = (): void => {
   const config = loadConfig();
   note(`roots  ${config.roots.length}`);
   for (const root of config.roots) {
     note(`  ${mark(existsSync(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
   }
-  note(`ai     ${config.ai.enabled ? 'enabled' : 'disabled'} via ${config.ai.command} ${config.ai.model}`);
-  note(`  ${mark(findOnPath(config.ai.command) !== null)} ${config.ai.command} on PATH`);
+  reportAi(config.ai);
 };
 
 export const runDoctor = (): ExitCode => {
@@ -34,7 +45,7 @@ export const runDoctor = (): ExitCode => {
   note(`index  ${mark(existsSync(indexFile()))} ${index.entries.length} dirs, ${ageMinutes}min old${isStale(index, Date.now()) ? ' (stale)' : ''}`);
   note(`db     ${mark(existsSync(dbFile()))} ${loadDb().records.length} remembered paths`);
   note(`visits ${mark(existsSync(visitsLog()))} ${visitsLog()}`);
-  note(`fzf    ${mark(findOnPath('fzf') !== null)}`);
+  note(`fzf    ${mark(resolveExecutable('fzf') !== null)}`);
   note(`tty    ${mark(hasTty())}`);
   return EXIT.noCd;
 };

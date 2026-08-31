@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseZoxideList } from '../src/commands/import-zoxide.js';
 import { CLOUD_DEPTH, DEV_DEPTH, HUB_MIN_CHILDREN, detectRoots } from '../src/commands/detect.js';
-import { loadConfig } from '../src/config.js';
+import { DEFAULT_AI, loadConfig } from '../src/config.js';
 import { DAY_SECONDS } from '../src/store/frecency.js';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
@@ -72,6 +72,7 @@ describe('cli surface', () => {
     expect(run.stderr).toContain('eval "$(cdai init zsh)"');
     const written: unknown = JSON.parse(readFileSync(join(fixture.configDir, 'config.json'), 'utf8'));
     expect(JSON.stringify(written)).toContain(join(fixture.rootDir, 'dev'));
+    expect(loadConfigFrom(fixture).ai.command).toBe('auto');
   });
 
   it('reports the machine state in doctor', () => {
@@ -88,11 +89,36 @@ describe('cli surface', () => {
     expect(runCli('index').stderr).toContain('depth 3');
   });
 
+  it('completes indexed directory names without human-facing output', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(EXIT_NO_CD);
+    const petal = runCli('complete', '--', 'pet');
+    expect(petal).toEqual({ status: 0, stdout: 'petalworks\n', stderr: '' });
+    expect(runCli('complete', '--', 'space').stdout).toBe('space dir with spaces\n');
+  });
+
+  it('emits Bash and fish completion hooks', () => {
+    const bash = runCli('init', 'bash');
+    const syntax = spawnSync('/bin/bash', ['-n'], { encoding: 'utf8', input: bash.stdout });
+    expect(bash.status).toBe(0);
+    expect(bash.stdout).toContain('complete -o filenames -F __cdai_complete cdai');
+    expect(syntax.status).toBe(0);
+    expect(runCli('init', 'fish').stdout).toContain("complete -c cdai -a '(__cdai_complete)'");
+  });
+
   it('honours the config dir override', () => {
     writeConfig(fixture);
     process.env['CDAI_CONFIG_DIR'] = fixture.configDir;
     expect(loadConfig().roots).toHaveLength(2);
     delete process.env['CDAI_CONFIG_DIR'];
+  });
+
+  it('sanitizes invalid AI command, argument, and timeout values', () => {
+    writeConfig(fixture, { command: ' ', args: ['--flag', 42], timeoutMs: 1.5 });
+    const config = loadConfigFrom(fixture);
+    expect(config.ai.command).toBe('auto');
+    expect(config.ai.args).toEqual(['--flag']);
+    expect(config.ai.timeoutMs).toBe(DEFAULT_AI.timeoutMs);
   });
 
   it('fails with usage when there is nothing to search for', () => {
@@ -108,4 +134,25 @@ describe('cli surface', () => {
     expect(run.status).toBe(1);
     expect(run.stderr).toContain('cdai setup');
   });
+
+  it('never emits a remembered directory that no longer exists', () => {
+    writeConfig(fixture);
+    writeFileSync(
+      join(fixture.dataDir, 'db.json'),
+      JSON.stringify({ records: [{ path: join(fixture.clients, 'ghost'), visits: 100, lastVisit: NOW }] }),
+    );
+    const run = runCli('query', '--', 'ghost');
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain('no longer exists');
+  });
 });
+
+const loadConfigFrom = (target: Fixture) => {
+  process.env['CDAI_CONFIG_DIR'] = target.configDir;
+  try {
+    return loadConfig();
+  } finally {
+    delete process.env['CDAI_CONFIG_DIR'];
+  }
+};

@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
+import { tryReadJson } from '../json.js';
 import { indexFile, writeAtomic } from '../paths.js';
 import type { Config, RootConfig } from '../config.js';
 
@@ -28,8 +29,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const readEntry = (value: unknown): IndexEntry | undefined => {
   if (!isRecord(value)) return undefined;
   const { path, name, mtime, root } = value;
-  if (typeof path !== 'string' || typeof name !== 'string') return undefined;
-  if (typeof mtime !== 'number' || typeof root !== 'string') return undefined;
+  if (typeof path !== 'string' || !isAbsolute(path) || typeof name !== 'string' || name === '') return undefined;
+  if (typeof root !== 'string' || !isAbsolute(root)) return undefined;
+  if (typeof mtime !== 'number' || !Number.isFinite(mtime) || mtime < 0) return undefined;
   return { path, name, mtime, root };
 };
 
@@ -38,12 +40,15 @@ export const emptyIndex = (): DirIndex => ({ version: INDEX_VERSION, generatedAt
 export const loadIndex = (): DirIndex => {
   const file = indexFile();
   if (!existsSync(file)) return emptyIndex();
-  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  const parsed = tryReadJson(file);
   if (!isRecord(parsed) || !Array.isArray(parsed['entries'])) return emptyIndex();
   const generatedAt = parsed['generatedAt'];
   return {
     version: INDEX_VERSION,
-    generatedAt: typeof generatedAt === 'number' ? generatedAt : 0,
+    generatedAt:
+      typeof generatedAt === 'number' && Number.isFinite(generatedAt) && generatedAt >= 0
+        ? generatedAt
+        : 0,
     entries: parsed['entries'].map(readEntry).filter((e): e is IndexEntry => e !== undefined),
   };
 };
@@ -53,7 +58,7 @@ export const saveIndex = (index: DirIndex): void => {
 };
 
 export const isStale = (index: DirIndex, now: number): boolean =>
-  now - index.generatedAt > INDEX_TTL_MS;
+  index.generatedAt > now || now - index.generatedAt > INDEX_TTL_MS;
 
 const shouldSkip = (name: string, ignore: readonly string[]): boolean =>
   name.startsWith(HIDDEN_PREFIX) || ignore.includes(name);
@@ -123,7 +128,7 @@ export const buildIndex = (config: Config, now: number = Date.now()): DirIndex =
   const state: WalkState = {
     entries: [],
     seen: new Set(),
-    deadline: now + MAX_WALK_MS,
+    deadline: Date.now() + MAX_WALK_MS,
     ignore: config.ignore,
   };
   for (const root of config.roots) {

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { findOnPath } from '../picker.js';
+import { resolveExecutable } from '../executable.js';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
 import { loadDb, saveDb } from '../store/db.js';
 import { DAY_SECONDS, type VisitRecord } from '../store/frecency.js';
@@ -29,7 +29,7 @@ export const parseZoxideList = (stdout: string, nowSeconds: number): VisitRecord
 };
 
 export const runImportZoxide = (): ExitCode => {
-  if (findOnPath(ZOXIDE) === null) {
+  if (resolveExecutable(ZOXIDE) === null) {
     fail('zoxide not found on PATH', 'nothing to import');
     return EXIT.error;
   }

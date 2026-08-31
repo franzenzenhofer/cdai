@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { absolutize, configFile, writeAtomic } from './paths.js';
 
 export const DEFAULT_DEPTH = 2;
+export const MAX_DEPTH = 64;
 export const DEFAULT_IGNORE = [
   'node_modules',
   '.git',
@@ -15,12 +16,14 @@ export const DEFAULT_IGNORE = [
 ];
 export const DEFAULT_AI = {
   enabled: true,
-  command: 'claude',
+  command: 'auto',
   args: [] as string[],
-  model: 'sonnet',
-  /** Measured `claude -p` round trip on a warm machine is 13 to 17s, so 20s would be a coin flip. */
+  model: '',
+  /** Long enough for remote CLI cold starts while still bounding a failed backend. */
   timeoutMs: 45_000,
 } as const;
+
+const MAX_TIMER_MS = 2_147_483_647;
 
 export interface RootConfig {
   readonly path: string;
@@ -46,33 +49,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const readRoots = (value: unknown): RootConfig[] => {
   if (!Array.isArray(value)) return [];
-  const roots: RootConfig[] = [];
+  const roots = new Map<string, RootConfig>();
   for (const entry of value) {
-    if (typeof entry === 'string') {
-      roots.push({ path: absolutize(entry), depth: DEFAULT_DEPTH });
-      continue;
-    }
-    if (!isRecord(entry) || typeof entry['path'] !== 'string') continue;
-    const depth = entry['depth'];
-    roots.push({
-      path: absolutize(entry['path']),
-      depth: typeof depth === 'number' && depth > 0 ? Math.floor(depth) : DEFAULT_DEPTH,
-    });
+    const rawPath = typeof entry === 'string' ? entry : isRecord(entry) ? entry['path'] : undefined;
+    if (typeof rawPath !== 'string' || rawPath.trim() === '') continue;
+    const rawDepth = isRecord(entry) ? entry['depth'] : undefined;
+    const validDepth =
+      typeof rawDepth === 'number' && Number.isFinite(rawDepth) && rawDepth > 0
+        ? Math.min(MAX_DEPTH, Math.floor(rawDepth))
+        : DEFAULT_DEPTH;
+    const path = absolutize(rawPath);
+    roots.set(path, { path, depth: validDepth });
   }
-  return roots;
+  return [...roots.values()];
 };
 
 const readAi = (value: unknown): AiConfig => {
   if (!isRecord(value)) return { ...DEFAULT_AI };
   const args = value['args'];
+  const command = value['command'];
+  const timeoutMs = value['timeoutMs'];
   return {
     enabled: typeof value['enabled'] === 'boolean' ? value['enabled'] : DEFAULT_AI.enabled,
-    command: typeof value['command'] === 'string' ? value['command'] : DEFAULT_AI.command,
+    command:
+      typeof command === 'string' && command.trim() !== '' ? command : DEFAULT_AI.command,
     args: Array.isArray(args) ? args.filter((a): a is string => typeof a === 'string') : [],
     model: typeof value['model'] === 'string' ? value['model'] : DEFAULT_AI.model,
     timeoutMs:
-      typeof value['timeoutMs'] === 'number' && value['timeoutMs'] > 0
-        ? value['timeoutMs']
+      typeof timeoutMs === 'number' &&
+      Number.isSafeInteger(timeoutMs) &&
+      timeoutMs > 0 &&
+      timeoutMs <= MAX_TIMER_MS
+        ? timeoutMs
         : DEFAULT_AI.timeoutMs,
   };
 };

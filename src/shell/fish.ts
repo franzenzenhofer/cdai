@@ -6,18 +6,14 @@ const recorder = (): string => `function __cdai_record --on-variable PWD
 end`;
 
 const jumper = (): string => `function cdai
-    if test (count $argv) -eq 0
-        builtin cd -- "$HOME"
-        return
+    if test (count $argv) -gt 0
+        if string match -qr '^[-+]' -- "$argv[1]"
+            builtin cd $argv
+            return
+        end
     end
-    if test (count $argv) -eq 1; and test "$argv[1]" = "-"
-        builtin cd -
-        return
-    end
-    if test (count $argv) -eq 1; and test -d "$argv[1]"
-        builtin cd -- "$argv[1]"
-        return
-    end
+    builtin cd -- $argv 2>/dev/null
+    and return
     set -l bin cdai
     if set -q CDAI_BIN
         set bin (string split ' ' -- $CDAI_BIN)
@@ -28,6 +24,22 @@ const jumper = (): string => `function cdai
         builtin cd -- "$result"
     end
 end`;
+
+const completer = (): string => `function __cdai_complete
+    set -l bin cdai
+    if set -q CDAI_BIN
+        set bin (string split ' ' -- $CDAI_BIN)
+    end
+    set -l words (commandline -opc)
+    set -l current (commandline -ct)
+    if test -n "$current"
+        if test (count $words) -eq 0; or test "$words[-1]" != "$current"
+            set -a words "$current"
+        end
+    end
+    command $bin complete -- $words[2..-1] 2>/dev/null
+end
+complete -c cdai -a '(__cdai_complete)'`;
 
 /** Emitted by `cdai init fish`. fish reacts to directory changes via the PWD variable event. */
 export const fishInit = (): string => `# cdai shell integration (fish)
@@ -41,4 +53,6 @@ end
 ${recorder()}
 
 ${jumper()}
+
+${completer()}
 `;

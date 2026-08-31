@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { resolveExecutable } from './executable.js';
 import { contractTilde } from './paths.js';
 import { note } from './protocol.js';
 
@@ -13,16 +13,6 @@ export interface PickerItem {
   readonly path: string;
   readonly label: string;
 }
-
-export const findOnPath = (command: string): string | null => {
-  const raw = process.env['PATH'] ?? '';
-  for (const dir of raw.split(delimiter)) {
-    if (dir === '') continue;
-    const full = join(dir, command);
-    if (existsSync(full)) return full;
-  }
-  return null;
-};
 
 export const hasTty = (): boolean => existsSync(TTY) && canOpenTty();
 
@@ -86,6 +76,6 @@ export const pick = (items: readonly PickerItem[]): string | null => {
     items.forEach((item) => note(`  ${item.label}`));
     return null;
   }
-  if (findOnPath(FZF) !== null) return pickWithFzf(items);
+  if (resolveExecutable(FZF) !== null) return pickWithFzf(items);
   return pickNumbered(items);
 };

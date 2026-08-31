@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { buildIndex, childrenOf, emptyIndex, isStale, loadIndex, refreshIndex } from '../src/store/indexer.js';
@@ -67,6 +69,12 @@ describe('buildIndex', () => {
     expect(names).toContain('06-workshop');
     expect(names).not.toContain('slides');
   });
+
+  it('uses wall time for the crawl deadline, independent of the stored timestamp', () => {
+    const index = buildIndex(loadConfig(), 1);
+    expect(index.generatedAt).toBe(1);
+    expect(index.entries.length).toBeGreaterThan(0);
+  });
 });
 
 describe('index persistence', () => {
@@ -84,6 +92,15 @@ describe('index persistence', () => {
 
   it('is fresh right after a refresh', () => {
     expect(isStale(refreshIndex(loadConfig()), Date.now())).toBe(false);
+  });
+
+  it('treats a future cache timestamp as stale after clock skew', () => {
+    expect(isStale({ ...emptyIndex(), generatedAt: Date.now() + 1 }, Date.now())).toBe(true);
+  });
+
+  it('treats malformed JSON as an empty rebuildable cache', () => {
+    writeFileSync(join(fixture.dataDir, 'index.json'), '{partial');
+    expect(loadIndex()).toEqual(emptyIndex());
   });
 });
 

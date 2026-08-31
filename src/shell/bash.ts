@@ -18,22 +18,32 @@ case "$PROMPT_COMMAND" in
 esac`;
 
 const jumper = (): string => `cdai() {
-  if [ "$#" -eq 0 ]; then
-    builtin cd -- "$HOME"
+  if [ "$#" -gt 0 ] && [ "\${1#-}" != "$1" ]; then
+    builtin cd "$@"
     return
   fi
-  if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then
-    builtin cd -
-    return
-  fi
-  if [ "$#" -eq 1 ] && [ -d "$1" ]; then
-    builtin cd -- "$1"
-    return
-  fi
+  builtin cd -- "$@" 2>/dev/null && return
   local result
   result="$(command \${CDAI_BIN:-cdai} query -- "$@")" || return $?
   [ -n "$result" ] && builtin cd -- "$result"
 }`;
+
+const completer = (): string => `__cdai_complete() {
+  local current="\${COMP_WORDS[COMP_CWORD]}"
+  local candidate
+  COMPREPLY=()
+  if [ "\${current#-}" != "$current" ]; then
+    COMPREPLY=( $(compgen -W '-L -P -e --' -- "$current") )
+    return
+  fi
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+  done < <(compgen -d -- "$current")
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
+  done < <(command \${CDAI_BIN:-cdai} complete -- "\${COMP_WORDS[@]:1}" 2>/dev/null)
+}
+complete -o filenames -F __cdai_complete cdai`;
 
 /** Emitted by `cdai init bash`. PROMPT_COMMAND is the bash equivalent of the zsh chpwd hook. */
 export const bashInit = (): string => `# cdai shell integration (bash)
@@ -44,4 +54,6 @@ _CDAI_DATA="$CDAI_DATA_DIR"
 ${recorder()}
 
 ${jumper()}
+
+${completer()}
 `;

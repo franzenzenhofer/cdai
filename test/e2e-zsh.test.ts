@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
@@ -83,6 +83,7 @@ describe('cdai init zsh', () => {
     expect(init.status).toBe(0);
     expect(init.stderr).toBe('');
     expect(init.stdout).toContain('add-zsh-hook chpwd __cdai_record');
+    expect(init.stdout).toContain('compdef __cdai_complete cdai');
     const evaluated = runZsh(withInit('typeset -f cdai > /dev/null && print ok'));
     expect(evaluated.stdout.trim()).toBe('ok');
   });
@@ -123,6 +124,22 @@ describe('cdai in a real zsh', () => {
   it('treats a single existing directory as a plain cd', () => {
     const run = runZsh(withInit(`cdai ${fixture.projects}/squash; pwd`));
     expect(run.stdout.trim()).toBe(`${fixture.projects}/squash`);
+    expect(run.stderr).toBe('');
+  });
+
+  it('passes cd options through to the shell builtin', () => {
+    const link = `${fixture.projects}/squash-link`;
+    const run = runZsh(withInit(`cdai -P ${link}; pwd`));
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe(realpathSync(`${fixture.projects}/squash`));
+    expect(run.stderr).toBe('');
+  });
+
+  it('preserves zsh native old-new directory substitution', () => {
+    const start = `${fixture.projects}/tabletop-web`;
+    const run = runZsh(withInit(`cd ${start}; cdai web 3d; pwd`));
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe(`${fixture.projects}/tabletop-3d`);
     expect(run.stderr).toBe('');
   });
 
