@@ -1,18 +1,23 @@
-# cdai - cd with intent
+# cdai — cd with intent
 
-A directory jumper that indexes folders you have **never visited**, understands
-`latest`, `oldest` and year filters deterministically, and only asks an LLM when its own
-matcher admits it is unsure. It auto-detects Apfel, Claude and Gemini, supports Ollama and
-arbitrary one-shot AI CLIs, and keeps the fast path completely model-free.
+[![CI](https://github.com/franzenzenhofer/cdai/actions/workflows/ci.yml/badge.svg)](https://github.com/franzenzenhofer/cdai/actions/workflows/ci.yml)
 
-The AI tier cannot invent a path. It picks from a list, or it declines. More on that below,
-because it is the only genuinely interesting thing in here.
+**Jump to the directory you mean—even if you have never visited it before.**
+
+`cdai` keeps normal `cd` behavior, adds a local directory index and frecency, understands intent
+such as `latest` or `2025`, and can use an optional AI fallback that is not allowed to invent a
+path. The fast path and every Tab completion are deterministic and model-free.
+
+![cdai terminal demo: smart Tab, latest folder, and a remembered alias](docs/demo.gif)
+
+## The 30-second version
 
 ```console
-$ cdai petal
+$ cdai pet<Tab>
+$ cdai petalworks
 → ~/Dropbox/clients/petalworks
 
-$ cdai latest petalworks folder
+$ cdai -P latest petalworks folder
 → ~/Dropbox/clients/petalworks/petalworks-2026
 
 $ cdai petalworks 2025
@@ -23,45 +28,103 @@ cdai: thinking... (apfel)
 cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/n]
 → ~/Dropbox/clients/petalworks
 
-# the confirmed wording is now a local, model-free hit
+# the confirmed wording is now a local, model-free alias
 $ cdai that client with the flowers
 → ~/Dropbox/clients/petalworks
 ```
 
-The deterministic cases are reproducible against the tree from `docs/demo-fixture.sh`; record
-the included terminal demo with `sh docs/demo-fixture.sh && vhs docs/demo.tape`. The AI example
-additionally needs that client in history - see below for why, and what happens when it is not.
+| Property | What cdai does |
+|---|---|
+| Native behavior | Tries your shell's real `cd` first; paths, flags, `cd -`, CDPATH and errors stay native |
+| Cold directories | Indexes configured roots, so unvisited folders are searchable |
+| Smart Tab | Completes prefixes, compact forms and bounded typos from local cached state |
+| Common intent | Handles `latest`, `oldest`, years and `in <root>` without AI |
+| Vague intent | Optionally asks an AI to choose from existing, pre-approved paths |
+| Runtime footprint | One bundled Node 20+ executable, zero runtime npm dependencies |
 
-![cdai demo](docs/demo.gif)
+## Install
 
-## Why not just zoxide
+Requires Node.js 20+ and zsh, Bash or Fish on macOS or Linux.
 
-I use [zoxide](https://github.com/ajeetdsouza/zoxide) and cdai steals its frecency formula on
-purpose. But zoxide can only rank directories you have already `cd`'d into, and my problem is
-the opposite one: freelance client folders I visit **once a year**. A pure frecency tool has
-never seen them, so they do not exist. The first jump is always the manual one.
+```bash
+npm install -g github:franzenzenhofer/cdai
+cdai setup
+```
 
-cdai keeps a crawled index of configured roots, so a folder you have never opened is a first
-class candidate. Frecency then reorders what the index found.
+Add one line to your shell config, then start a new shell:
 
-|  | zoxide | cdai |
+| Shell | Config file | Add this line |
+|---|---|---|
+| zsh | `~/.zshrc` | `eval "$(cdai init zsh)"` |
+| Bash | `~/.bashrc` | `eval "$(cdai init bash)"` |
+| Fish | `~/.config/fish/config.fish` | `cdai init fish \| source` |
+
+```bash
+exec "$SHELL"
+cdai doctor
+```
+
+Coming from zoxide? `cdai import zoxide` seeds the local frecency database.
+
+For non-interactive setup, consent is deliberately explicit:
+
+```bash
+cdai setup --root "$HOME/dev" --depth 3 --yes --no-ai
+```
+
+## Why this exists
+
+I use [zoxide](https://github.com/ajeetdsouza/zoxide), and cdai deliberately uses the same
+frecency formula. But frecency can only rank places already in its history. My awkward case is
+the opposite: client and archive folders I may open once a year. The first jump is still manual.
+
+cdai indexes only the roots you configure, then uses frecency to rank that known tree. That
+makes a never-visited directory a first-class candidate.
+
+| Capability | zoxide | cdai |
 |---|---|---|
 | frecency ranking | yes | yes, same aging formula |
 | learns from your shell | yes | yes, prompt/PWD hook, no Node process on directory change |
 | indexes directories you have never visited | no | yes, configurable roots and depth |
 | `latest` / `oldest` / year / `in <root>` | no | yes, deterministic, no LLM |
 | natural language fallback | no | optional, one config flag to kill it |
-| runtime dependencies | Rust binary | Node, zero npm dependencies |
+| runtime requirement | standalone binary | Node 20+; zero npm dependencies |
 | cold jump on an unvisited folder | miss | hit |
 
-## The part that matters: the AI cannot hallucinate a directory
+Use zoxide if visited-directory frecency is the whole problem; it is mature, fast and ships as
+a static binary. Use cdai if cold directories, deterministic intent and guarded natural-language
+fallback are useful enough to justify a Node executable.
 
-An LLM that picks your working directory is a terrible idea if it can emit arbitrary strings.
-So it cannot. Tier 2 gets a closed list - the top 30 fuzzy candidates plus your 20 most frecent
-paths - and the reply contract is one JSON object naming a path **from that list**. The answer
-is then re-checked against that exact list and the filesystem. cdai emits its original trusted
-candidate, never the model's spelling of the path. An existing but unoffered directory is still
-rejected.
+## Smart Tab, not just `cd` completion
+
+Tab merges the shell's native directories and CDPATH with cdai's cached index, frecency, current
+directory context and confirmed aliases.
+
+```console
+$ cdai gma<Tab>       # goalmap: compact subsequence
+$ cdai petla<Tab>     # petalworks: bounded typo correction
+$ cdai latest pet<Tab>
+```
+
+The safety rule is intentionally conservative: prefix results may fan out, but a non-prefix
+correction must have one clear winner. Ambiguous or unrelated text is left untouched. Duplicate
+directory names complete to the shared basename and are disambiguated by the picker after Enter.
+
+Tab reads local cached state only. It never calls AI, opens a picker, refreshes the index, ingests
+history or crawls the filesystem.
+
+## The AI cannot hallucinate a directory
+
+Giving an LLM arbitrary control of your working directory would be a terrible idea. cdai uses a
+closed-set protocol instead:
+
+1. The deterministic matcher supplies up to 30 fuzzy and 20 frecent existing paths.
+2. The model may choose one exact path from that list, or decline.
+3. cdai checks the answer against both the original list and the filesystem.
+4. You confirm the first answer; only then can the wording become a local alias.
+
+cdai emits its own trusted candidate, never the model's spelling. Even an existing path is
+rejected if it was not offered.
 
 That makes the failure mode boring on purpose. Two measured runs of the same query:
 
@@ -77,18 +140,15 @@ cdai: thinking... (apfel)
 cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/n]
 ```
 
-The model is a re-ranker over a set you could have printed yourself, not a path generator. It
-is doing the one thing it is good at - "flowers" means "petalworks" - and is structurally
-prevented from doing the thing it is bad at. A missing backend, a timeout, or a chatty model
-degrades to fuzzy suggestions, never to a wrong `cd`. A confirmed natural-language answer is
-stored as a bounded local alias, validated against the current roots and filesystem, and reused
-without another model call. Deterministic matching still wins if the tree later gains a better
-direct match.
+The model is a re-ranker over a set you could print yourself, not a path generator. A missing
+backend, timeout, malformed answer or chatty model degrades to fuzzy suggestions. Confirmed
+answers are stored as bounded local aliases and revalidated before reuse; deterministic matching
+still wins if the tree later gains a better direct match.
 
 Corollary, stated plainly: cdai does **not** do semantic search over your whole disk. If the
 directory is neither a fuzzy candidate nor recently used, no amount of LLM will find it.
 
-## Numbers
+## Measured performance
 
 Measured on an Apple Silicon laptop (macOS 26, Node 25) against an index of about **2,500
 directories**. Best of 10 runs, full process spawn to exit, `spawnSync` from a Node harness:
@@ -106,6 +166,14 @@ build if the 10-run median crosses 150ms or p95 crosses 250ms for either an exac
 cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
+
+The v0.3.1 release suite covers 216 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
+completion budget; and the packed tarball is installed and executed instead of testing only the
+source tree.
+
+<details>
+<summary><strong>Architecture and scoring</strong></summary>
 
 ## How it works
 
@@ -138,7 +206,7 @@ Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecency)` and a small
 bonus for living under your current directory. All tokens must match (AND). A directory and its
 own parent collapse into one answer, because they are the same place, not two options. Every
-threshold in that diagram is a named constant in one 77 line file, `src/match/constants.ts`.
+threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
 
 ### Deterministic operators
 
@@ -153,49 +221,29 @@ threshold in that diagram is a named constant in one 77 line file, `src/match/co
 | `cdai -` | plain `cd -`, back to the previous directory |
 | `cdai` | plain `cd ~`, muscle memory stays intact |
 
-## Install
+</details>
 
-```bash
-npm i -g github:franzenzenhofer/cdai
-cdai setup                       # detects your project roots, writes the config
-echo 'eval "$(cdai init zsh)"' >> ~/.zshrc
-exec zsh
-```
+## Native `cd` compatibility
 
-bash: `eval "$(cdai init bash)"` in `~/.bashrc`. fish: `cdai init fish | source` in
-`~/.config/fish/config.fish`. Coming from zoxide? `cdai import zoxide` seeds your frecency.
+The shell wrapper always gives native behavior the first chance:
 
-For automation or a machine without a terminal, consent is explicit:
+- `cdai`, `cdai -`, explicit paths, CDPATH and zsh's `cd old new` substitution stay native.
+- zsh/Bash `-L` and `-P` compose with intent; Fish flags are feature-detected by version.
+- Stack syntax, late or invalid flags, and failed path-shaped input are never guessed.
+- Existing local directories win even when their name is also a cdai command.
+- Human messages go to stderr; `cdai query` reserves stdout for the resolved path.
 
-```bash
-cdai setup --root "$HOME/dev" --depth 3 --yes --no-ai
-```
+Cache migrations happen automatically. After an upgrade, start a new shell to load the latest
+wrapper; `cdai doctor` reports stale or partial state and the exact repair command.
 
-The shell integration keeps native `cd` behavior first, including `cd -`, directory history,
-CDPATH, and zsh's `cd old new` substitution. In zsh and Bash, options such as `-L` and `-P`
-compose with indexed intent (`cdai -P petal`). Current Fish supports `-L`/`--no-dereference`
-and `-P`/`--dereference`; cdai feature-detects those flags and composes them with intent while
-remaining compatible with older Fish. Failed explicit paths containing `/` or starting with `~`, stack
-syntax, and invalid options stay native-only instead of being guessed. Ordinary words fall back
-to cdai intent. Tab completion combines filesystem and CDPATH directories with the cached index,
-visit frecency, cwd context, and confirmed local aliases. It understands compact forms (`gma` →
-`goalmap`), bounded typos, multi-word intent, years, `latest`/`oldest`, and `in <root>`. Multiple
-results are emitted only when they extend the active word; a non-prefix correction must be a
-single best match, so Tab never shortens the command to an unrelated common prefix. Duplicate
-destinations complete to their shared basename and cdai's picker disambiguates after Enter.
-Completion strips recognized flags and never invokes AI, opens a picker, ingests visits, or
-crawls the filesystem.
-Documented controls such as `cdai doctor`, `cdai index --refresh`, and `cdai --version` go
-directly to the executable. Native behavior still wins when a one-word control is an existing
-relative directory. After upgrading, restart the shell (for example, `exec zsh`) to load the
-latest wrapper and completion definitions. Cache format upgrades migrate automatically; changed
-root configuration is reported by `cdai doctor` with the exact refresh command.
-
-On Apple Silicon with macOS 26+, `brew install apfel` adds a fast, private, on-device fallback.
-It needs Apple Intelligence enabled, but no API key or model download beyond Apple's system
-model.
+<details>
+<summary><strong>Optional AI backends and privacy</strong></summary>
 
 ## AI backends
+
+On Apple Silicon with macOS 26+, `brew install apfel` adds a private, on-device fallback. It
+uses Apple's system model and requires Apple Intelligence, but no API key or separate model
+download.
 
 The default `"command": "auto"` chooses the first installed backend in this order:
 
@@ -247,6 +295,11 @@ The chosen backend receives the words you typed, your cwd, and up to 50 in-root 
 **paths** - never file contents. With Apfel or Ollama that stays local; cloud-backed CLIs apply
 their own privacy and billing policies.
 
+</details>
+
+<details>
+<summary><strong>Configuration and local state</strong></summary>
+
 ## Configuration
 
 `~/.config/cdai/config.json` (override with `CDAI_CONFIG_DIR`, data with `CDAI_DATA_DIR`):
@@ -270,6 +323,11 @@ from older installs. The index carries a roots/depth/ignore fingerprint, reports
 and is rebuilt automatically when that configuration changes. Concurrent shells serialize
 short atomic updates so visits and aliases are not lost or double-counted.
 
+</details>
+
+<details>
+<summary><strong>Command reference</strong></summary>
+
 ## Commands
 
 ```
@@ -292,6 +350,8 @@ cdai --version
 Exit codes: `0` success, `3` a navigation choice was deliberately aborted, anything else is an
 error. stdout carries the resolved path and nothing else; every human readable byte goes to
 stderr.
+
+</details>
 
 ## Limitations
 
