@@ -383,6 +383,23 @@ for all three shells. Exact-query and cached-completion median/p95 latency remai
 The packed tarball is installed and executed in the suite. Zero runtime dependencies; the build
 is one bundled `dist/cdai.js`.
 
+## Releasing
+
+Homebrew installs from a GitHub release tarball, so a merged fix does not reach anyone until a
+tag exists and the tap points at it. A local `npm link` of this repo is a second copy of `cdai`
+on `PATH`; whichever of `/opt/homebrew/bin` and the Node bin dir comes first wins, so always
+check `cdai --version` after upgrading rather than assuming.
+
+1. Bump `version` in `package.json`. Nothing else hardcodes it - `src/cli.ts` and the tests read
+   it from there.
+2. `npm run typecheck && npm run lint && npm run test && npm run build`, then commit `dist/cdai.js`
+   with the source. CI enforces that the committed bundle matches a fresh build.
+3. Push `main`, then `git tag -a vX.Y.Z -m "..."` and push the tag.
+4. In [franzenzenhofer/homebrew-tap](https://github.com/franzenzenhofer/homebrew-tap),
+   `Formula/cdai.rb`: point `url` at the new tag, set `sha256` to
+   `shasum -a 256` of that tarball, and drop any `revision` line. Push.
+5. `brew update && brew upgrade cdai`, then confirm `cdai --version`.
+
 ## Prior art
 
 [zoxide](https://github.com/ajeetdsouza/zoxide) and [z](https://github.com/rupa/z) for frecency,
