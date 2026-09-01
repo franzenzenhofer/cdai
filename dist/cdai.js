@@ -64,6 +64,13 @@ var isUnder = (child, parent) => {
   const p = resolve(parent);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
 };
+var isDirectory = (path) => {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
 var isProtocolSafePath = (path) => !/[\r\n]/u.test(path);
 var privateMode = (path, fallback) => {
   try {
@@ -1119,9 +1126,6 @@ var runDoctor = (args = []) => {
   return EXIT.ok;
 };
 
-// src/commands/complete.ts
-import { existsSync as existsSync10, statSync as statSync6 } from "node:fs";
-
 // src/match/resolve.ts
 import { basename as basename4, dirname as dirname3 } from "node:path";
 
@@ -1344,6 +1348,7 @@ var buildCandidates = (input) => {
   for (const record of input.db.records) {
     const identity = record.realPath ?? record.path;
     if (byIdentity.has(identity)) continue;
+    if (!isDirectory(record.path)) continue;
     byIdentity.set(identity, {
       path: record.path,
       name: basename4(record.path),
@@ -1562,13 +1567,6 @@ var MILLIS_PER_SECOND = 1e3;
 var CLI_CONTROL_SET = new Set(CLI_CONTROLS);
 var FUZZY_LIMIT = 5;
 var VALIDATION_ATTEMPT_LIMIT = 512;
-var isDirectory = (path) => {
-  try {
-    return existsSync10(path) && statSync6(path).isDirectory();
-  } catch {
-    return false;
-  }
-};
 var hasUnsafeCompletionChar = (value) => [...value].some((char) => {
   const code = char.codePointAt(0) ?? 0;
   return code <= 31 || code === 127;
@@ -1637,7 +1635,7 @@ var runComplete = (args) => {
 
 // src/commands/import-zoxide.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync11 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 var ZOXIDE = "zoxide";
 var ZOXIDE_ARGS = ["query", "--list", "--score"];
 var MILLIS_PER_SECOND2 = 1e3;
@@ -1669,7 +1667,7 @@ var runImportZoxide = () => {
     return EXIT.error;
   }
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
-  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync11(r.path));
+  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync10(r.path));
   updateDb((db) => {
     const byPath = new Map(db.records.map((record) => [record.path, record]));
     for (const record of imported) {
@@ -1729,11 +1727,8 @@ var runIndex = (args) => {
   return EXIT.ok;
 };
 
-// src/commands/query.ts
-import { existsSync as existsSync12, statSync as statSync8 } from "node:fs";
-
 // src/ai/client.ts
-import { statSync as statSync7 } from "node:fs";
+import { statSync as statSync6 } from "node:fs";
 import { resolve as resolve4 } from "node:path";
 
 // src/ai/process.ts
@@ -1874,7 +1869,7 @@ var parseAiAnswer = (raw) => {
 };
 var isDirectory2 = (path) => {
   try {
-    return statSync7(path).isDirectory();
+    return statSync6(path).isDirectory();
   } catch {
     return false;
   }
@@ -1940,13 +1935,6 @@ var buildAiRequest = (input) => {
 
 // src/commands/query.ts
 var MILLIS_PER_SECOND3 = 1e3;
-var isDirectory3 = (path) => {
-  try {
-    return existsSync12(path) && statSync8(path).isDirectory();
-  } catch {
-    return false;
-  }
-};
 var suggest = (ranked, raw) => {
   fail(`no match for "${raw}"`);
   const guesses = ranked.slice(0, LIMIT.suggestions);
@@ -1967,7 +1955,7 @@ var jumpKnown = (path) => {
   return EXIT.ok;
 };
 var jumpExisting = (path) => {
-  if (!isDirectory3(path)) {
+  if (!isDirectory(path)) {
     fail("matched directory no longer exists", "run `cdai index --refresh`");
     return EXIT.error;
   }
@@ -1977,7 +1965,7 @@ var recalledAlias = (context) => {
   const alias = findAlias(context.query.raw);
   if (alias === void 0) return null;
   const trusted = context.config.roots.some((root) => isUnder(alias.path, root.path));
-  if (trusted && isDirectory3(alias.path)) return jumpKnown(alias.path);
+  if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
   forgetAlias(context.query.raw);
   return null;
 };
@@ -2026,13 +2014,13 @@ var retryFresh = async (context) => {
 };
 var finish = async (decision, context, refreshed) => {
   if (decision.kind === "hit") {
-    if (isDirectory3(decision.path)) return jumpKnown(decision.path);
+    if (isDirectory(decision.path)) return jumpKnown(decision.path);
     return refreshed ? jumpExisting(decision.path) : retryFresh(context);
   }
   if (decision.kind === "choose") {
     const chosen = pick(toItems(decision.candidates.map((c) => c.candidate.path)));
     if (chosen === null) return EXIT.noCd;
-    if (isDirectory3(chosen)) return jumpKnown(chosen);
+    if (isDirectory(chosen)) return jumpKnown(chosen);
     return refreshed ? jumpExisting(chosen) : retryFresh(context);
   }
   return aiTier(decision.candidates, context);
@@ -2055,7 +2043,7 @@ var searchInput = (args) => {
 };
 var runQuery = async (args) => {
   const first = args[0];
-  if (args.length === 1 && first !== void 0 && isDirectory3(absolutize(first))) {
+  if (args.length === 1 && first !== void 0 && isDirectory(absolutize(first))) {
     return jumpKnown(absolutize(first));
   }
   const search = searchInput(args);
@@ -2080,11 +2068,11 @@ var runQuery = async (args) => {
 };
 
 // src/commands/setup.ts
-import { statSync as statSync9 } from "node:fs";
+import { statSync as statSync7 } from "node:fs";
 import { basename as basename6 } from "node:path";
 
 // src/commands/detect.ts
-import { existsSync as existsSync13, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync11, readdirSync as readdirSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
 var DEV_DIR_NAMES = ["dev", "code", "src", "projects", "work", "Developer", "repos", "git"];
@@ -2118,7 +2106,7 @@ var detectRoots = (home = homedir2()) => {
   const roots = [];
   for (const name of DEV_DIR_NAMES) {
     const dir = join5(home, name);
-    if (existsSync13(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
+    if (existsSync11(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
   }
   for (const cloud of cloudRoots(home)) {
     const hub = bestHub(cloud);
@@ -2225,7 +2213,7 @@ var explicitRootConfigs = (options) => {
   for (const raw of options.roots) {
     const path = absolutize(raw);
     try {
-      if (!statSync9(path).isDirectory()) throw new Error("not a directory");
+      if (!statSync7(path).isDirectory()) throw new Error("not a directory");
     } catch {
       fail(`setup root is not an existing directory: ${contractTilde(path)}`);
       return null;
@@ -2872,7 +2860,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.1",
+  version: "0.3.2",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

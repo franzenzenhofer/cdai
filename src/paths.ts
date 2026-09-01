@@ -74,6 +74,15 @@ export const isUnder = (child: string, parent: string): boolean => {
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
 };
 
+/** The only question that matters about a matched path: can the shell cd into it? */
+export const isDirectory = (path: string): boolean => {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
 /** Newline-delimited shell output cannot represent paths containing a line break. */
 export const isProtocolSafePath = (path: string): boolean => !/[\r\n]/u.test(path);
 

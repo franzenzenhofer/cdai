@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { THRESHOLD } from '../src/match/constants.js';
-import { collapseChains, decide, looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../src/match/resolve.js';
+import { buildCandidates, collapseChains, decide, looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../src/match/resolve.js';
 import type { ScoredCandidate } from '../src/match/score.js';
 import { tokenize } from '../src/match/tokenize.js';
 import { emptyDb, type Db } from '../src/store/db.js';
@@ -129,7 +129,8 @@ describe('resolveQuery', () => {
   });
 
   it('finds a remembered path that is outside every root', () => {
-    const outside = '/private/var/somewhere/gadgetron';
+    const outside = join(fixture.rootDir, 'elsewhere', 'gadgetron');
+    mkdirSync(outside, { recursive: true });
     const decision = run(
       'gadgetron',
       withDb({ ...emptyDb(), records: [{ path: outside, visits: 3, lastVisit: NOW_SECONDS }] }),
@@ -137,9 +138,47 @@ describe('resolveQuery', () => {
     expect(decision.kind === 'hit' && decision.path).toBe(outside);
   });
 
+  /** A folder merged into another as a subfolder: the old sibling is gone but still remembered. */
+  it('jumps to the surviving subfolder instead of offering the deleted sibling', () => {
+    const deleted = join(fixture.projects, 'squash-src');
+    const decision = run(
+      'squash src',
+      withDb({ ...emptyDb(), records: [{ path: deleted, visits: 500, lastVisit: NOW_SECONDS }] }),
+    );
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.projects}/squash/src`);
+  });
+
   it('finds directories with spaces and unicode', () => {
     expect(run('space dir with spaces').kind).toBe('hit');
     expect(run('ünicöde').kind).toBe('hit');
+  });
+});
+
+describe('buildCandidates', () => {
+  it('keeps a remembered directory that still exists outside every root', () => {
+    const outside = join(fixture.rootDir, 'elsewhere', 'gadgetron');
+    mkdirSync(outside, { recursive: true });
+    const paths = buildCandidates(
+      withDb({ ...emptyDb(), records: [{ path: outside, visits: 3, lastVisit: NOW_SECONDS }] }),
+    ).map((c) => c.path);
+    expect(paths).toContain(outside);
+  });
+
+  it('drops a remembered directory that no longer exists', () => {
+    const deleted = join(fixture.rootDir, 'elsewhere', 'vanished');
+    const paths = buildCandidates(
+      withDb({ ...emptyDb(), records: [{ path: deleted, visits: 3, lastVisit: NOW_SECONDS }] }),
+    ).map((c) => c.path);
+    expect(paths).not.toContain(deleted);
+  });
+
+  it('drops a remembered path that is now a file', () => {
+    const file = join(fixture.projects, 'squash', 'readme.md');
+    const paths = buildCandidates(
+      withDb({ ...emptyDb(), records: [{ path: file, visits: 3, lastVisit: NOW_SECONDS }] }),
+    ).map((c) => c.path);
+    expect(paths).not.toContain(file);
   });
 });
 

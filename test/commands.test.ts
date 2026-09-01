@@ -7,6 +7,7 @@ import { CLOUD_DEPTH, DEV_DEPTH, HUB_MIN_CHILDREN, detectRoots } from '../src/co
 import { DEFAULT_AI, loadConfig } from '../src/config.js';
 import { DAY_SECONDS } from '../src/store/frecency.js';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
+import packageJson from '../package.json' with { type: 'json' };
 
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');
@@ -312,7 +313,7 @@ describe('cli surface', () => {
     expect(runCli('--help').status).toBe(0);
     const version = runCli('--version');
     expect(version.status).toBe(0);
-    expect(version.stderr.trim()).toBe('0.3.1');
+    expect(version.stderr.trim()).toBe(packageJson.version);
   });
 
   it('lists and forgets confirmed aliases without editing JSON', () => {
@@ -366,16 +367,18 @@ describe('cli surface', () => {
     expect(run.stderr).toContain('cdai setup');
   });
 
-  it('never emits a remembered directory that no longer exists', () => {
+  it('never emits or even names a remembered directory that no longer exists', () => {
     writeConfig(fixture);
+    const ghost = join(fixture.clients, 'ghost');
     writeFileSync(
       join(fixture.dataDir, 'db.json'),
-      JSON.stringify({ version: 1, records: [{ path: join(fixture.clients, 'ghost'), visits: 100, lastVisit: NOW }] }),
+      JSON.stringify({ version: 1, records: [{ path: ghost, visits: 100, lastVisit: NOW }] }),
     );
     const run = runCli('query', '--', 'ghost');
     expect(run.status).toBe(1);
     expect(run.stdout).toBe('');
-    expect(run.stderr).toContain('no longer exists');
+    expect(run.stderr).toContain('no match for "ghost"');
+    expect(run.stderr).not.toContain(ghost);
   });
 
   it('refreshes once when a confident cached hit moved', () => {

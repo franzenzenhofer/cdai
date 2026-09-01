@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'nod
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
+import packageJson from '../package.json' with { type: 'json' };
 
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');
@@ -183,7 +184,7 @@ describe('cdai in a real zsh', () => {
     expect(run.stdout).toContain('version=0');
     expect(run.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
     expect(run.stderr).toContain('cdai doctor');
-    expect(run.stderr).toContain('0.3.1');
+    expect(run.stderr).toContain(packageJson.version);
     expect(run.stderr).not.toContain('thinking');
   });
 

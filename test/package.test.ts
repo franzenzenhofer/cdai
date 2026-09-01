@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeFixture, type Fixture } from './fixtures.js';
+import packageJson from '../package.json' with { type: 'json' };
 
 const REPO = process.cwd();
 let fixture: Fixture;
@@ -38,7 +39,7 @@ describe('packed installation', () => {
     const version = spawnSync('node', [installedBin, '--version'], { encoding: 'utf8' });
     expect(version.status).toBe(0);
     expect(version.stdout).toBe('');
-    expect(version.stderr.trim()).toBe('0.3.1');
+    expect(version.stderr.trim()).toBe(packageJson.version);
   });
 
   it('ships only the declared runtime surface', () => {

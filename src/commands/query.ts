@@ -1,4 +1,3 @@
-import { existsSync, statSync } from 'node:fs';
 import { backendLabel, resolveAiBackend } from '../ai/backend.js';
 import { askAi, type AiOutcome } from '../ai/client.js';
 import { buildAiRequest } from '../ai/prompt.js';
@@ -7,7 +6,7 @@ import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
 import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import { absolutize, contractTilde, isProtocolSafePath, isUnder } from '../paths.js';
+import { absolutize, contractTilde, isDirectory, isProtocolSafePath, isUnder } from '../paths.js';
 import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
@@ -23,14 +22,6 @@ interface QueryContext {
   readonly nowSeconds: number;
   readonly input: ResolveInput;
 }
-
-const isDirectory = (path: string): boolean => {
-  try {
-    return existsSync(path) && statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-};
 
 const suggest = (ranked: readonly ScoredCandidate[], raw: string): ExitCode => {
   fail(`no match for "${raw}"`);

@@ -1,4 +1,3 @@
-import { existsSync, statSync } from 'node:fs';
 import { collapseChains, buildCandidates, frecencyMap, type ResolveInput } from '../match/resolve.js';
 import { rankCandidates, type ScoredCandidate } from '../match/score.js';
 import {
@@ -14,6 +13,7 @@ import { loadDb } from '../store/db.js';
 import { loadIndex, matchesConfig } from '../store/indexer.js';
 import { CLI_CONTROLS, stripCdOptions } from '../shell/control.js';
 import { loadAliases } from '../store/aliases.js';
+import { isDirectory } from '../paths.js';
 import { completeAliasWords, completeRootNames } from './completion-aliases.js';
 
 export const COMPLETION_LIMIT = 20;
@@ -21,14 +21,6 @@ const MILLIS_PER_SECOND = 1000;
 const CLI_CONTROL_SET = new Set<string>(CLI_CONTROLS);
 const FUZZY_LIMIT = 5;
 const VALIDATION_ATTEMPT_LIMIT = 512;
-
-const isDirectory = (path: string): boolean => {
-  try {
-    return existsSync(path) && statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-};
 
 const hasUnsafeCompletionChar = (value: string): boolean =>
   [...value].some((char) => {

@@ -13,6 +13,7 @@ import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
 import { frecency } from '../store/frecency.js';
 import { PathChainSet } from './path-trie.js';
+import { isDirectory } from '../paths.js';
 
 export interface ResolveInput {
   readonly index: DirIndex;
@@ -29,13 +30,20 @@ export type Decision =
 export const frecencyMap = (db: Db, nowSeconds: number): Map<string, number> =>
   new Map(db.records.map((record) => [record.realPath ?? record.path, frecency(record, nowSeconds)]));
 
-/** Index entries plus every remembered path, so visited dirs outside the roots stay reachable. */
+/**
+ * Index entries plus every remembered path that still exists, so visited dirs outside the roots
+ * stay reachable while deleted ones stay out of the answer. The index is a filesystem scan; the
+ * db is memory, and a remembered directory can have been renamed, merged away or deleted. A dead
+ * record used to reach the picker and turn a clean hit on its successor into a question. Only
+ * records the index does not already cover are stat'd, so completion stays off the disk.
+ */
 export const buildCandidates = (input: ResolveInput): Candidate[] => {
   const byIdentity = new Map<string, Candidate>();
   for (const entry of input.index.entries) byIdentity.set(entry.realPath, entry);
   for (const record of input.db.records) {
     const identity = record.realPath ?? record.path;
     if (byIdentity.has(identity)) continue;
+    if (!isDirectory(record.path)) continue;
     byIdentity.set(identity, {
       path: record.path,
       name: basename(record.path),
