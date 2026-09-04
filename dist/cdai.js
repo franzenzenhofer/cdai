@@ -606,7 +606,7 @@ var readLineFromTty = () => {
   try {
     const buffer = Buffer.alloc(READ_BUFFER_BYTES);
     const bytes = readSync(fd, buffer, 0, READ_BUFFER_BYTES, null);
-    return buffer.toString("utf8", 0, bytes).trim();
+    return bytes === 0 ? null : buffer.toString("utf8", 0, bytes).trim();
   } finally {
     closeSync(fd);
   }
@@ -614,8 +614,7 @@ var readLineFromTty = () => {
 var pickNumbered = (items) => {
   items.forEach((item, i) => note(`  ${i + 1}) ${item.label}`));
   process.stderr.write("cdai: pick 1-" + items.length + " (enter to abort): ");
-  const answer = readLineFromTty();
-  const choice = Number.parseInt(answer, 10);
+  const choice = Number.parseInt(readLineFromTty() ?? "", 10);
   if (!Number.isFinite(choice) || choice < 1 || choice > items.length) return null;
   return items[choice - 1]?.path ?? null;
 };
@@ -625,8 +624,13 @@ var confirm = (question) => {
     return false;
   }
   process.stderr.write(`${question} [Y/n] `);
-  const answer = readLineFromTty().toLowerCase();
-  return answer === "" || answer === "y" || answer === "yes";
+  const answer = readLineFromTty();
+  if (answer === null) {
+    note("cdai: terminal closed before answering, declined");
+    return false;
+  }
+  const lower = answer.toLowerCase();
+  return lower === "" || lower === "y" || lower === "yes";
 };
 var toItems = (paths) => paths.map((path) => ({ path, label: contractTilde(path) }));
 var pick = (items) => {
@@ -3006,7 +3010,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.3",
+  version: "0.3.4",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

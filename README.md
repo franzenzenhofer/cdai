@@ -238,7 +238,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.3.3 release suite covers 232 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.3.4 release suite covers 233 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
@@ -343,6 +343,9 @@ When a backend does fail, it gets to say why: a non-zero exit quotes the first l
 wrote to stderr (`claude exited with 1: error: unknown option '--safe-mode'`), and unparseable
 output is quoted back instead of being summarised as "unparseable". `CDAI_DEBUG=1 cdai <words>`
 prints the backend's full raw output to stderr.
+
+An AI answer is only ever acted on after you say yes, and that consent fails closed in every
+direction: no terminal declines, and a terminal that closes before answering declines too.
 Setup states which backend was selected and that vague queries plus candidate paths may be sent
 to it. Use `cdai setup --no-ai` during or after setup to opt out, and `--ai` to re-enable it.
 

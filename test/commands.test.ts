@@ -441,6 +441,24 @@ describe('cli surface', () => {
     expect(readFileSync(counter, 'utf8').trim().split('\n')).toEqual(['called']);
   });
 
+  it('declines an AI answer when the terminal closes without an answer', () => {
+    const target = join(fixture.clients, 'petalworks');
+    const shim = join(fixture.rootDir, 'eof-ai-shim');
+    writeFileSync(shim, `#!/bin/sh\nprintf '%s' '{"path":"${target}","reason":"flowers"}'\n`);
+    chmodSync(shim, 0o755);
+    writeConfig(fixture, { enabled: true, command: shim, args: [], model: '' });
+    writeFileSync(
+      join(fixture.dataDir, 'db.json'),
+      JSON.stringify({ version: 1, records: [{ path: target, visits: 10, lastVisit: NOW }] }),
+    );
+    expect(runCli('index', '--refresh').status).toBe(0);
+    // Ctrl-D on an empty line: the read returns EOF, nobody answered, consent fails closed.
+    const run = runCliWithTty('\u0004', 'query', '--', 'that', 'client', 'with', 'flowers');
+    expect(run.status).toBe(3);
+    expect(run.output).toContain('terminal closed before answering, declined');
+    expect(existsSync(join(fixture.dataDir, 'aliases.json'))).toBe(false);
+  });
+
   it('invalidates a confirmed intent when its target is missing', () => {
     writeConfig(fixture);
     expect(runCli('index', '--refresh').status).toBe(0);

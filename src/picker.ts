@@ -34,12 +34,13 @@ const pickWithFzf = (items: readonly PickerItem[]): string | null => {
   return match?.path ?? null;
 };
 
-const readLineFromTty = (): string => {
+/** Null is "the terminal closed without answering"; "" is "the user pressed Enter". */
+const readLineFromTty = (): string | null => {
   const fd = openSync(TTY, 'r');
   try {
     const buffer = Buffer.alloc(READ_BUFFER_BYTES);
     const bytes = readSync(fd, buffer, 0, READ_BUFFER_BYTES, null);
-    return buffer.toString('utf8', 0, bytes).trim();
+    return bytes === 0 ? null : buffer.toString('utf8', 0, bytes).trim();
   } finally {
     closeSync(fd);
   }
@@ -48,8 +49,7 @@ const readLineFromTty = (): string => {
 const pickNumbered = (items: readonly PickerItem[]): string | null => {
   items.forEach((item, i) => note(`  ${i + 1}) ${item.label}`));
   process.stderr.write('cdai: pick 1-' + items.length + ' (enter to abort): ');
-  const answer = readLineFromTty();
-  const choice = Number.parseInt(answer, 10);
+  const choice = Number.parseInt(readLineFromTty() ?? '', 10);
   if (!Number.isFinite(choice) || choice < 1 || choice > items.length) return null;
   return items[choice - 1]?.path ?? null;
 };
@@ -61,8 +61,13 @@ export const confirm = (question: string): boolean => {
     return false;
   }
   process.stderr.write(`${question} [Y/n] `);
-  const answer = readLineFromTty().toLowerCase();
-  return answer === '' || answer === 'y' || answer === 'yes';
+  const answer = readLineFromTty();
+  if (answer === null) {
+    note('cdai: terminal closed before answering, declined');
+    return false;
+  }
+  const lower = answer.toLowerCase();
+  return lower === '' || lower === 'y' || lower === 'yes';
 };
 
 export const toItems = (paths: readonly string[]): PickerItem[] =>
