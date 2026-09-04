@@ -26,7 +26,7 @@ const context = (frecency: ReadonlyArray<readonly [string, number]> = [], cwd = 
 describe('matchName', () => {
   it('ranks the match classes in the documented order', () => {
     expect(matchName('squash', 'squash')).toBe(SCORE.exact);
-    expect(matchName('squi', 'squash')).toBe(SCORE.prefix);
+    expect(matchName('squa', 'squash')).toBe(SCORE.prefix);
     expect(matchName('3d', 'tabletop-3d')).toBe(SCORE.wordBoundary);
     expect(matchName('works', 'petalworks')).toBe(SCORE.substring);
     expect(matchName('sqh', 'squash')).toBeGreaterThan(SCORE.none);

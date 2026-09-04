@@ -67,8 +67,9 @@ export const splitWords = (input: string): string[] =>
 
 /**
  * The same query read as host names instead of literal words, or null when no word is a host.
- * Franz's client folders are literally called "nordwind.at" and "amt.gv.at", so the word the user
- * typed always gets the first attempt; this reading is only tried when that finds nothing.
+ * Client folders are routinely named after the site itself, decoration and all - "nordwind.at",
+ * "amt.gv.at" - so the word the user typed always gets the first attempt; this reading is only
+ * tried when that finds nothing.
  */
 export const hostReduced = (query: ParsedQuery): ParsedQuery | null => {
   const tokens = query.tokens.map(hostLabel);

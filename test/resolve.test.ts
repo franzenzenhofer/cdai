@@ -64,7 +64,7 @@ describe('resolveQuery', () => {
   });
 
   it('offers a picker when two different places match', () => {
-    const decision = run('tictac');
+    const decision = run('tabletop');
     expect(decision.kind).toBe('choose');
     const paths = decision.kind === 'choose' ? decision.candidates.map((c) => c.candidate.name) : [];
     expect(paths.sort()).toEqual(['tabletop-3d', 'tabletop-web']);
@@ -121,7 +121,7 @@ describe('resolveQuery', () => {
   it('lets frecency break a tie the index cannot', () => {
     const hot = `${fixture.projects}/tabletop-web`;
     const decision = run(
-      'tictac',
+      'tabletop',
       withDb({ ...emptyDb(), records: [{ path: hot, visits: 40, lastVisit: NOW_SECONDS }] }),
     );
     expect(decision.kind === 'hit' && decision.path).toBe(hot);

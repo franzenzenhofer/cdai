@@ -176,8 +176,9 @@ const resolveReading = (query: ParsedQuery, input: ResolveInput): Decision => {
 };
 
 /**
- * A literal directory name always outranks a derived one. "nordwind.at" is a real folder here, so
- * the typed word decides first and the host reading only speaks when nothing answered at all.
+ * A literal directory name always outranks a derived one. A folder can literally be called
+ * "nordwind.at", so the typed word decides first and the host reading only speaks when
+ * nothing answered at all.
  */
 export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision => {
   const literal = resolveReading(query, input);

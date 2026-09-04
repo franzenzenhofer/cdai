@@ -115,7 +115,7 @@ describe('cdai in a real zsh', () => {
 
   it('feeds those visits back into the ranking', () => {
     runZsh(withInit(`cd ${fixture.projects}/tabletop-web; cd ${fixture.projects}/tabletop-web`));
-    const run = runZsh(withInit('cdai tictac; pwd'));
+    const run = runZsh(withInit('cdai tabletop; pwd'));
     expect(run.stdout.trim()).toBe(`${fixture.projects}/tabletop-web`);
   });
 
@@ -220,7 +220,7 @@ describe('cdai in a real zsh', () => {
   });
 
   it('exits with the no-cd code when it cannot ask which one', async () => {
-    const run = await runZshHeadless(withInit('cdai tictac; print "exit=$?"; pwd'));
+    const run = await runZshHeadless(withInit('cdai tabletop; print "exit=$?"; pwd'));
     expect(run.stdout).toContain(`exit=${EXIT_NO_CD}`);
     expect(run.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
     expect(run.stderr).toContain('tabletop-3d');

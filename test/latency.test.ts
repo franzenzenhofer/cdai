@@ -92,7 +92,7 @@ describe('latency', () => {
     const timings: number[] = [];
     for (let i = 0; i < RUNS; i += 1) {
       const started = Date.now();
-      const run = spawnSync('node', [BIN, 'complete', '--', 'asa'], {
+      const run = spawnSync('node', [BIN, 'complete', '--', 'alm'], {
         encoding: 'utf8',
         cwd: fixture.rootDir,
         env: {
