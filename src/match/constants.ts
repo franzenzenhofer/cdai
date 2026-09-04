@@ -73,6 +73,11 @@ export const STOPWORDS = new Set([
   'to',
   'my',
   'in',
+  'of',
+  'a',
+  'an',
+  'for',
+  'from',
 ]);
 
 export const LATEST_WORDS = new Set(['latest', 'newest', 'last', 'recent']);

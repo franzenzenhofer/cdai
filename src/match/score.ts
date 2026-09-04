@@ -167,16 +167,19 @@ const contextualScore = (
 /**
  * Relaxed, direction agnostic match used only to give the AI tier something to look at when
  * the strict matcher found nothing at all ("squashy" should still surface the "squash" dir).
+ * The backward direction is discounted by how much of the token the name actually spells, so a
+ * generic four letter "site" cannot outrank "lumenlab-website" on the token "website".
  */
 export const looseScore = (query: ParsedQuery, candidate: Candidate): number => {
   const name = candidate.name.toLowerCase();
   let best: number = SCORE.none;
   for (const token of query.tokens) {
     const forward = fuzzyScore(token, name);
-    const backward = fuzzyScore(name, token);
+    const shrink = token.length === 0 ? 0 : Math.min(1, name.length / token.length);
+    const backward = fuzzyScore(name, token) * shrink;
     best = Math.max(best, forward, backward);
   }
-  return best;
+  return Math.round(best);
 };
 
 export const rankCandidates = (

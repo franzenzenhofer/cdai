@@ -28,6 +28,7 @@ export const PROJECT_DIRS = [
   'zenith',
   'zenith/node_modules/left-pad',
   'almanac',
+  'nordwind',
   'goalmap',
   'spring',
   'string',
@@ -37,6 +38,9 @@ export const PROJECT_DIRS = [
 ];
 
 export const CLIENT_DIRS = [
+  // Client folders are routinely named after the site itself, decoration and all.
+  'nordwind.at',
+  'orbit-website',
   'petalworks',
   'petalworks/petalworks-2024',
   'petalworks/petalworks-2025',

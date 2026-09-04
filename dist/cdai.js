@@ -419,6 +419,13 @@ var resolveExecutable = (command) => {
 };
 
 // src/ai/claude.ts
+var SYSTEM_PROMPT = "You are a path classifier. Reply with exactly one JSON object and no other text, no preamble, no explanation, no code fence.";
+var ANSWER_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: { path: { type: ["string", "null"] }, reason: { type: "string" } },
+  required: ["path", "reason"],
+  additionalProperties: false
+});
 var claudeArgs = (extraArgs, model, prompt) => [
   ...extraArgs,
   "-p",
@@ -428,6 +435,12 @@ var claudeArgs = (extraArgs, model, prompt) => [
   "json",
   "--tools",
   "",
+  "--safe-mode",
+  "--strict-mcp-config",
+  "--system-prompt",
+  SYSTEM_PROMPT,
+  "--json-schema",
+  ANSWER_SCHEMA,
   "--no-session-persistence",
   prompt
 ];
@@ -1193,7 +1206,12 @@ var STOPWORDS = /* @__PURE__ */ new Set([
   "go",
   "to",
   "my",
-  "in"
+  "in",
+  "of",
+  "a",
+  "an",
+  "for",
+  "from"
 ]);
 var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
 var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
@@ -1301,15 +1319,147 @@ var looseScore = (query, candidate) => {
   let best = SCORE.none;
   for (const token of query.tokens) {
     const forward = fuzzyScore(token, name);
-    const backward = fuzzyScore(name, token);
+    const shrink = token.length === 0 ? 0 : Math.min(1, name.length / token.length);
+    const backward = fuzzyScore(name, token) * shrink;
     best = Math.max(best, forward, backward);
   }
-  return best;
+  return Math.round(best);
 };
 var rankCandidates = (query, candidates, context) => candidates.map((candidate) => {
   const quality = matchQuality(query, candidate);
   return { candidate, quality, score: quality === SCORE.none ? SCORE.none : contextualScore(query, candidate, context, quality) };
 }).filter((scored) => scored.score > SCORE.none).sort((a, b) => b.quality - a.quality || b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
+
+// src/match/tokenize.ts
+var YEAR_PATTERN = /^\d{4}$/;
+var HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/;
+var TLDS = /* @__PURE__ */ new Set([
+  "com",
+  "net",
+  "org",
+  "info",
+  "biz",
+  "io",
+  "ai",
+  "dev",
+  "app",
+  "co",
+  "me",
+  "tv",
+  "xyz",
+  "cloud",
+  "site",
+  "online",
+  "shop",
+  "blog",
+  "at",
+  "de",
+  "ch",
+  "uk",
+  "eu",
+  "it",
+  "fr",
+  "es",
+  "nl",
+  "pl",
+  "cz",
+  "hu",
+  "si",
+  "sk",
+  "us",
+  "ca",
+  "au",
+  "nz",
+  "jp",
+  "cn",
+  "in",
+  "br"
+]);
+var HOST_NOISE = /* @__PURE__ */ new Set([
+  "www",
+  "m",
+  "web",
+  "shop",
+  "blog",
+  "app",
+  "api",
+  "dev",
+  "staging",
+  "test",
+  "mail",
+  "co",
+  "com",
+  "net",
+  "org",
+  "gov",
+  "edu",
+  "ac"
+]);
+var isYear = (token) => {
+  if (!YEAR_PATTERN.test(token)) return false;
+  const value = Number.parseInt(token, 10);
+  return value >= YEAR_MIN && value <= YEAR_MAX;
+};
+var hostLabel = (word) => {
+  const bare = word.replace(/^[a-z]+:\/\//u, "").replace(/[.,;:!?]+$/u, "");
+  if (!HOST_PATTERN.test(bare)) return word;
+  const labels = bare.split("/")[0]?.split(".") ?? [];
+  if (!TLDS.has(labels.at(-1) ?? "")) return word;
+  const named = labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
+  return named.at(-1) ?? word;
+};
+var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
+var hostReduced = (query) => {
+  const tokens = query.tokens.map(hostLabel);
+  if (tokens.every((token, index) => token === query.tokens[index])) return null;
+  return { ...query, tokens };
+};
+var takeRootFilter = (words) => {
+  const rest = [];
+  let rootFilter = null;
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const next = words[i + 1];
+    if (word === IN_OPERATOR && next !== void 0 && rootFilter === null) {
+      rootFilter = next;
+      i += 1;
+      continue;
+    }
+    rest.push(word);
+  }
+  return { rest, rootFilter };
+};
+var takeOrder = (words) => {
+  const rest = [];
+  let order = "none";
+  for (const word of words) {
+    if (LATEST_WORDS.has(word) && order === "none") {
+      order = "latest";
+      continue;
+    }
+    if (OLDEST_WORDS.has(word) && order === "none") {
+      order = "oldest";
+      continue;
+    }
+    rest.push(word);
+  }
+  return { rest, order };
+};
+var tokenize = (input) => {
+  const words = splitWords(input);
+  const { rest: afterIn, rootFilter } = takeRootFilter(words);
+  const { rest: afterOrder, order } = takeOrder(afterIn);
+  const years = afterOrder.filter(isYear);
+  const searchable = afterOrder.filter((word) => !isYear(word));
+  const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
+  const tokens = meaningful.length > 0 ? meaningful : searchable;
+  if (tokens.length === 0 && words.length > 0) {
+    return { raw: input, tokens: words, order: "none", years: [], rootFilter: null };
+  }
+  return { raw: input, tokens, order, years, rootFilter };
+};
+var tokenizeArgs = (args) => tokenize(args.join(" "));
 
 // src/match/path-trie.ts
 var node = () => ({ terminal: false, children: /* @__PURE__ */ new Map() });
@@ -1417,8 +1567,18 @@ var decide = (ranked) => {
   }
   return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
-var looseCandidates = (query, input) => buildCandidates(input).map((candidate) => ({ candidate, score: looseScore(query, candidate) })).filter((scored) => scored.score > 0).sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path)).slice(0, LIMIT.aiFuzzy);
-var resolveQuery = (query, input) => {
+var readings = (query) => {
+  const reduced = hostReduced(query);
+  return reduced === null ? [query] : [query, reduced];
+};
+var looseCandidates = (query, input) => {
+  const queries = readings(query);
+  return buildCandidates(input).map((candidate) => ({
+    candidate,
+    score: Math.max(...queries.map((reading) => looseScore(reading, candidate)))
+  })).filter((scored) => scored.score > 0).sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path)).slice(0, LIMIT.aiFuzzy);
+};
+var resolveReading = (query, input) => {
   const context = {
     cwd: input.cwd,
     frecencyByPath: frecencyMap(input.db, input.nowSeconds)
@@ -1430,6 +1590,14 @@ var resolveQuery = (query, input) => {
   }
   const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
   return decide(ranked);
+};
+var resolveQuery = (query, input) => {
+  const literal = resolveReading(query, input);
+  if (literal.kind !== "unsure") return literal;
+  const reduced = hostReduced(query);
+  if (reduced === null) return literal;
+  const host = resolveReading(reduced, input);
+  return host.kind === "unsure" && host.candidates.length === 0 ? literal : host;
 };
 
 // src/match/completion.ts
@@ -1448,61 +1616,6 @@ var smartNameMatch = (fragment, name) => {
   return literal > SCORE.none ? { kind: "typo", strength: literal } : void 0;
 };
 var isSmartNameMatch = (fragment, name) => smartNameMatch(fragment, name) !== void 0;
-
-// src/match/tokenize.ts
-var YEAR_PATTERN = /^\d{4}$/;
-var isYear = (token) => {
-  if (!YEAR_PATTERN.test(token)) return false;
-  const value = Number.parseInt(token, 10);
-  return value >= YEAR_MIN && value <= YEAR_MAX;
-};
-var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
-var takeRootFilter = (words) => {
-  const rest = [];
-  let rootFilter = null;
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === void 0) continue;
-    const next = words[i + 1];
-    if (word === IN_OPERATOR && next !== void 0 && rootFilter === null) {
-      rootFilter = next;
-      i += 1;
-      continue;
-    }
-    rest.push(word);
-  }
-  return { rest, rootFilter };
-};
-var takeOrder = (words) => {
-  const rest = [];
-  let order = "none";
-  for (const word of words) {
-    if (LATEST_WORDS.has(word) && order === "none") {
-      order = "latest";
-      continue;
-    }
-    if (OLDEST_WORDS.has(word) && order === "none") {
-      order = "oldest";
-      continue;
-    }
-    rest.push(word);
-  }
-  return { rest, order };
-};
-var tokenize = (input) => {
-  const words = splitWords(input);
-  const { rest: afterIn, rootFilter } = takeRootFilter(words);
-  const { rest: afterOrder, order } = takeOrder(afterIn);
-  const years = afterOrder.filter(isYear);
-  const searchable = afterOrder.filter((word) => !isYear(word));
-  const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
-  const tokens = meaningful.length > 0 ? meaningful : searchable;
-  if (tokens.length === 0 && words.length > 0) {
-    return { raw: input, tokens: words, order: "none", years: [], rootFilter: null };
-  }
-  return { raw: input, tokens, order, years, rootFilter };
-};
-var tokenizeArgs = (args) => tokenize(args.join(" "));
 
 // src/shell/control.ts
 var CLI_CONTROLS = [
@@ -1733,12 +1846,24 @@ import { resolve as resolve4 } from "node:path";
 
 // src/ai/process.ts
 import { spawn } from "node:child_process";
+
+// src/ai/text.ts
+var CONTROL_MAX = 32;
+var DELETE_CODE = 127;
+var flattenText = (text, maxLength) => [...text].map((char) => {
+  const code = char.codePointAt(0) ?? 0;
+  return code < CONTROL_MAX || code === DELETE_CODE ? " " : char;
+}).join("").replace(/\s+/gu, " ").trim().slice(0, maxLength);
+
+// src/ai/process.ts
 var MAX_OUTPUT_BYTES = 1024 * 1024;
+var MAX_STDERR_BYTES = 4096;
+var MAX_STDERR_EXCERPT = 120;
 var KILL_GRACE_MS = 250;
 var spawnBackend = (backend2, prompt) => spawn(backend2.command, aiArgs(backend2, prompt), {
   detached: process.platform !== "win32",
   env: { ...process.env, NO_COLOR: "1" },
-  stdio: ["ignore", "pipe", "ignore"]
+  stdio: ["ignore", "pipe", "pipe"]
 });
 var terminateBackend = (child, signal) => {
   try {
@@ -1750,6 +1875,7 @@ var terminateBackend = (child, signal) => {
 var abortBackend = (child, error, finish2) => {
   terminateBackend(child, "SIGTERM");
   child.stdout.destroy();
+  child.stderr.destroy();
   const escalation = setTimeout(() => terminateBackend(child, "SIGKILL"), KILL_GRACE_MS);
   escalation.unref();
   finish2(error);
@@ -1762,9 +1888,23 @@ var collectOutput = (child, output, abort, label) => {
     if (output.bytes > MAX_OUTPUT_BYTES) abort(new Error(`${label} output exceeded 1 MiB`));
   });
 };
+var collectDiagnostics = (child, diagnostics) => {
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    if (diagnostics.bytes >= MAX_STDERR_BYTES) return;
+    diagnostics.text += chunk;
+    diagnostics.bytes += Buffer.byteLength(chunk);
+  });
+};
+var exitError = (label, code, diagnostics) => {
+  const detail = flattenText(diagnostics, MAX_STDERR_EXCERPT);
+  const suffix = detail === "" ? "" : `: ${detail}`;
+  return new Error(`${label} exited with ${String(code)}${suffix}`);
+};
 var runAiCommand = (backend2, prompt, timeoutMs) => new Promise((resolveOutput, reject) => {
   const child = spawnBackend(backend2, prompt);
   const output = { text: "", bytes: 0 };
+  const diagnostics = { text: "", bytes: 0 };
   let settled = false;
   const finish2 = (error) => {
     if (settled) return;
@@ -1781,15 +1921,19 @@ var runAiCommand = (backend2, prompt, timeoutMs) => new Promise((resolveOutput, 
     timeoutMs
   );
   collectOutput(child, output, abort, backend2.kind);
+  collectDiagnostics(child, diagnostics);
   child.on("error", finish2);
-  child.on("close", (code) => finish2(code === 0 ? null : new Error(`${backend2.kind} exited with ${String(code)}`)));
+  child.on("close", (code) => finish2(code === 0 ? null : exitError(backend2.kind, code, diagnostics.text)));
 });
 
 // src/ai/client.ts
 var MAX_JSON_CANDIDATES = 32;
 var MAX_ENVELOPE_DEPTH = 6;
 var MAX_REASON_LENGTH = 120;
+var MAX_EXCERPT_LENGTH = 80;
 var ENVELOPE_KEYS = [
+  // A schema-validated answer is already the object cdai asked for, so it is read before prose.
+  "structured_output",
   "result",
   "response",
   "content",
@@ -1883,12 +2027,11 @@ var matchAiPath = (path, candidates) => {
   }
   return candidates.find((candidate) => resolve4(candidate) === requested && isDirectory2(candidate)) ?? null;
 };
-var sanitizeReason = (reason) => {
-  const visible = [...reason].map((char) => {
-    const code = char.codePointAt(0) ?? 0;
-    return code < 32 || code === 127 ? " " : char;
-  }).join("").replace(/\s+/gu, " ").trim();
-  return visible.slice(0, MAX_REASON_LENGTH);
+var sanitizeReason = (reason) => flattenText(reason, MAX_REASON_LENGTH);
+var excerpt = (raw) => {
+  const visible = flattenText(raw.slice(0, MAX_EXCERPT_LENGTH * 4), MAX_EXCERPT_LENGTH);
+  if (visible === "") return "unparseable answer, backend said nothing";
+  return `unparseable answer: ${visible}`;
 };
 var askAi = async (request, backend2, timeoutMs) => {
   if (request.candidates.length === 0) return { kind: "none", why: "no candidates" };
@@ -1898,8 +2041,11 @@ var askAi = async (request, backend2, timeoutMs) => {
   } catch (error) {
     return { kind: "none", why: error instanceof Error ? error.message : "ai backend failed" };
   }
+  if (process.env["CDAI_DEBUG"] === "1") process.stderr.write(`cdai: raw ai output
+${raw}
+`);
   const answer = parseAiAnswer(raw);
-  if (answer === null) return { kind: "none", why: "unparseable answer" };
+  if (answer === null) return { kind: "none", why: excerpt(raw) };
   const reason = sanitizeReason(answer.reason);
   if (answer.path === null) return { kind: "none", why: reason === "" ? "no idea" : reason };
   const path = matchAiPath(answer.path, request.candidates);
@@ -2860,7 +3006,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.2",
+  version: "0.3.3",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

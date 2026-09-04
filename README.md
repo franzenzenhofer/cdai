@@ -238,7 +238,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.3.1 release suite covers 216 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.3.3 release suite covers 232 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
@@ -251,7 +251,10 @@ source tree.
                     ▼
         ┌───────────────────────┐
         │ tokenize              │  operators: latest/oldest, 2026, "in dev"
-        │                       │  stopwords: folder, dir, the, project, go, to, my
+        │                       │  stopwords: folder, dir, the, project, go, to, my,
+        │                       │             of, a, an, for, from
+        │                       │  hosts: literal first, then
+        │                       │         www.lumenlab.com/blog -> lumenlab
         └───────────┬───────────┘
                     ▼
         ┌───────────────────────┐        ┌──────────────────┐
@@ -275,6 +278,13 @@ word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecenc
 bonus for living under your current directory. All tokens must match (AND). A directory and its
 own parent collapse into one answer, because they are the same place, not two options. Every
 threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
+
+**A host is read twice.** The word you typed always goes first, so a folder literally called
+`nordwind.at` or `amt.gv.at` still wins outright. Only when the literal word matches nothing does
+cdai read it as a host and search for the name it decorates: `lumenlab.com`, `www.lumenlab.com`
+and `https://www.lumenlab.com/blog` then all search for `lumenlab`, so `cdai lumenlab.com website`
+lands on `~/dev/lumenlab-website` without calling a model. The second reading needs a real public
+suffix, so `node.js` and `vite.config` are never anything but literal names.
 
 ## AI backends
 
@@ -318,6 +328,21 @@ cdai understands bare model JSON and the response envelopes emitted by Apfel, Cl
 and OpenAI-compatible tools. Backend output is capped at 1 MiB, calls time out and terminate
 the backend process group, control text is removed from displayed reasons, and every failure
 falls back to deterministic suggestions.
+
+### One question, not a coding session
+
+A `cd` is one classification, so the Claude backend is invoked as one: `--safe-mode` and
+`--strict-mcp-config` keep your `CLAUDE.md`, settings, skills, hooks and MCP servers out of it,
+`--system-prompt` replaces the agent persona with a path classifier, and `--json-schema` makes
+the CLI itself enforce the `{"path", "reason"}` shape. Without them the same query booted a full
+agent session - measured at 66k-114k input tokens, 4-8 seconds and up to $0.11 per `cd`, and
+answering in prose often enough that cdai reported `ai had no usable answer`. Hardened, the same
+query costs about 2k tokens and 2-3 seconds, and the answer arrives pre-validated.
+
+When a backend does fail, it gets to say why: a non-zero exit quotes the first line the backend
+wrote to stderr (`claude exited with 1: error: unknown option '--safe-mode'`), and unparseable
+output is quoted back instead of being summarised as "unparseable". `CDAI_DEBUG=1 cdai <words>`
+prints the backend's full raw output to stderr.
 Setup states which backend was selected and that vague queries plus candidate paths may be sent
 to it. Use `cdai setup --no-ai` during or after setup to opt out, and `--ai` to re-enable it.
 

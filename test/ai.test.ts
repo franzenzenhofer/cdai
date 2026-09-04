@@ -115,6 +115,14 @@ describe('parseAiAnswer', () => {
     });
   });
 
+  it('prefers the schema-validated answer over the prose the CLI also returns', () => {
+    const raw = JSON.stringify({
+      result: 'Sure! Here is the folder you meant.',
+      structured_output: { path: '/a/b', reason: 'schema validated' },
+    });
+    expect(parseAiAnswer(raw)).toEqual({ path: '/a/b', reason: 'schema validated' });
+  });
+
   it('reads an explicit null answer', () => {
     expect(parseAiAnswer('{"path": null, "reason": "no idea"}')).toEqual({ path: null, reason: 'no idea' });
   });
@@ -162,6 +170,12 @@ describe('AI backends', () => {
       'json',
       '--tools',
       '',
+      '--safe-mode',
+      '--strict-mcp-config',
+      '--system-prompt',
+      expect.stringContaining('exactly one JSON object'),
+      '--json-schema',
+      expect.stringContaining('"required":["path","reason"]'),
       '--no-session-persistence',
       'PROMPT',
     ]);
@@ -207,10 +221,19 @@ describe('askAi against a real shim process', () => {
     expect(outcome).toEqual({ kind: 'path', path: target, reason: 'flowers' });
   });
 
-  it('degrades on garbage output', async () => {
+  it('degrades on garbage output and quotes what the backend said', async () => {
     const command = writeShim(`printf 'I am a helpful assistant and I love talking'`);
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
-    expect(outcome).toEqual({ kind: 'none', why: 'unparseable answer' });
+    expect(outcome).toEqual({
+      kind: 'none',
+      why: 'unparseable answer: I am a helpful assistant and I love talking',
+    });
+  });
+
+  it('names an empty answer instead of blaming the parser', async () => {
+    const command = writeShim(`printf ''`);
+    const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
+    expect(outcome).toEqual({ kind: 'none', why: 'unparseable answer, backend said nothing' });
   });
 
   it('rejects even an existing in-root path when it was not offered', async () => {
@@ -244,10 +267,29 @@ describe('askAi against a real shim process', () => {
     expect(processTerminated(pid)).toBe(true);
   });
 
-  it('degrades when the backend exits non zero', async () => {
+  it('degrades when the backend exits non zero and quotes its own complaint', async () => {
+    const command = writeShim(`echo "error: unknown option '--safe-mode'" >&2; exit 7`);
+    const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
+    expect(outcome).toEqual({
+      kind: 'none',
+      why: "custom exited with 7: error: unknown option '--safe-mode'",
+    });
+  });
+
+  it('still reports a bare exit code when the backend says nothing', async () => {
     const command = writeShim('exit 7');
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
-    expect(outcome.kind).toBe('none');
+    expect(outcome).toEqual({ kind: 'none', why: 'custom exited with 7' });
+  });
+
+  it('drains a noisy stderr instead of letting a full pipe stall the answer', async () => {
+    const target = `${fixture.clients}/petalworks`;
+    const command = writeShim(
+      `head -c 200000 /dev/zero | tr '\\0' 'w' >&2\n`
+      + `printf '%s' '{"path": "${target}", "reason": "loud but fine"}'`,
+    );
+    const outcome = await askAi(requestFor([target]), backendFor(command), SHIM_TIMEOUT_MS);
+    expect(outcome).toEqual({ kind: 'path', path: target, reason: 'loud but fine' });
   });
 
   it('caps backend output instead of buffering without limit', async () => {

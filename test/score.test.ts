@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { SCORE } from '../src/match/constants.js';
-import { fuzzyScore, matchName, rankCandidates, scoreCandidate, type Candidate, type ScoreContext } from '../src/match/score.js';
+import {
+  fuzzyScore,
+  looseScore,
+  matchName,
+  rankCandidates,
+  scoreCandidate,
+  type Candidate,
+  type ScoreContext,
+} from '../src/match/score.js';
 import { tokenize } from '../src/match/tokenize.js';
 
 const candidate = (path: string, mtime = 0, root = '/roots/dev'): Candidate => ({
@@ -114,5 +122,18 @@ describe('rankCandidates', () => {
     const items = [candidate('/b/thing'), candidate('/a/thing')];
     const ranked = rankCandidates(tokenize('thing'), items, context());
     expect(ranked.map((r) => r.candidate.path)).toEqual(['/a/thing', '/b/thing']);
+  });
+});
+
+describe('looseScore', () => {
+  it('ranks the directory that spells the token above a generic short name', () => {
+    const query = tokenize('lumenlab.com website');
+    const real = looseScore(query, candidate('/roots/dev/lumenlab-website'));
+    const generic = looseScore(query, candidate('/roots/dev/skylark-ai/site'));
+    expect(real).toBeGreaterThan(generic);
+  });
+
+  it('still surfaces a shorter directory for a longer typed token', () => {
+    expect(looseScore(tokenize('squashy'), candidate('/roots/dev/squash'))).toBeGreaterThan(0);
   });
 });

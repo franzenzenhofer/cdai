@@ -21,6 +21,22 @@ export interface ParsedQuery {
 }
 
 const YEAR_PATTERN = /^\d{4}$/;
+/** "www.lumenlab.com", "lumenlab.com/blog" - a host, optionally with a path tail. */
+const HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/;
+/**
+ * Only real public suffixes turn a dotted word into a host, so "node.js" and "vite.config"
+ * stay literal directory names.
+ */
+const TLDS = new Set([
+  'com', 'net', 'org', 'info', 'biz', 'io', 'ai', 'dev', 'app', 'co', 'me', 'tv', 'xyz',
+  'cloud', 'site', 'online', 'shop', 'blog', 'at', 'de', 'ch', 'uk', 'eu', 'it', 'fr', 'es',
+  'nl', 'pl', 'cz', 'hu', 'si', 'sk', 'us', 'ca', 'au', 'nz', 'jp', 'cn', 'in', 'br',
+]);
+/** Labels that decorate a host without naming it, in either the sub- or the second level. */
+const HOST_NOISE = new Set([
+  'www', 'm', 'web', 'shop', 'blog', 'app', 'api', 'dev', 'staging', 'test', 'mail',
+  'co', 'com', 'net', 'org', 'gov', 'edu', 'ac',
+]);
 
 export const isYear = (token: string): boolean => {
   if (!YEAR_PATTERN.test(token)) return false;
@@ -28,11 +44,37 @@ export const isYear = (token: string): boolean => {
   return value >= YEAR_MIN && value <= YEAR_MAX;
 };
 
+/**
+ * A host is a name plus decoration: scheme, subdomain, TLD, path. A directory may be named
+ * after the name ("lumenlab-website") instead of the host, so "www.lumenlab.com/blog" also
+ * searches for "lumenlab". Reduced only when a recognisable host survives; "vite.config" stays
+ * intact. This is an alternative reading, never a replacement - see `hostReduced`.
+ */
+export const hostLabel = (word: string): string => {
+  const bare = word.replace(/^[a-z]+:\/\//u, '').replace(/[.,;:!?]+$/u, '');
+  if (!HOST_PATTERN.test(bare)) return word;
+  const labels = bare.split('/')[0]?.split('.') ?? [];
+  if (!TLDS.has(labels.at(-1) ?? '')) return word;
+  const named = labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
+  return named.at(-1) ?? word;
+};
+
 export const splitWords = (input: string): string[] =>
   input
     .toLowerCase()
     .split(/\s+/)
     .filter((word) => word !== '');
+
+/**
+ * The same query read as host names instead of literal words, or null when no word is a host.
+ * Franz's client folders are literally called "nordwind.at" and "amt.gv.at", so the word the user
+ * typed always gets the first attempt; this reading is only tried when that finds nothing.
+ */
+export const hostReduced = (query: ParsedQuery): ParsedQuery | null => {
+  const tokens = query.tokens.map(hostLabel);
+  if (tokens.every((token, index) => token === query.tokens[index])) return null;
+  return { ...query, tokens };
+};
 
 interface OperatorScan {
   readonly rest: string[];

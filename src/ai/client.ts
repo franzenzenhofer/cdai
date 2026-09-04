@@ -2,11 +2,15 @@ import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AiBackend } from './backend.js';
 import { runAiCommand } from './process.js';
+import { flattenText } from './text.js';
 
 const MAX_JSON_CANDIDATES = 32;
 const MAX_ENVELOPE_DEPTH = 6;
 const MAX_REASON_LENGTH = 120;
+const MAX_EXCERPT_LENGTH = 80;
 const ENVELOPE_KEYS = [
+  // A schema-validated answer is already the object cdai asked for, so it is read before prose.
+  'structured_output',
   'result',
   'response',
   'content',
@@ -136,16 +140,13 @@ export const matchAiPath = (path: string, candidates: readonly string[]): string
   return candidates.find((candidate) => resolve(candidate) === requested && isDirectory(candidate)) ?? null;
 };
 
-export const sanitizeReason = (reason: string): string => {
-  const visible = [...reason]
-    .map((char) => {
-      const code = char.codePointAt(0) ?? 0;
-      return code < 32 || code === 127 ? ' ' : char;
-    })
-    .join('')
-    .replace(/\s+/gu, ' ')
-    .trim();
-  return visible.slice(0, MAX_REASON_LENGTH);
+export const sanitizeReason = (reason: string): string => flattenText(reason, MAX_REASON_LENGTH);
+
+/** Without a look at what the backend actually said, "unparseable answer" is a dead end. */
+const excerpt = (raw: string): string => {
+  const visible = flattenText(raw.slice(0, MAX_EXCERPT_LENGTH * 4), MAX_EXCERPT_LENGTH);
+  if (visible === '') return 'unparseable answer, backend said nothing';
+  return `unparseable answer: ${visible}`;
 };
 
 export const askAi = async (
@@ -160,8 +161,9 @@ export const askAi = async (
   } catch (error) {
     return { kind: 'none', why: error instanceof Error ? error.message : 'ai backend failed' };
   }
+  if (process.env['CDAI_DEBUG'] === '1') process.stderr.write(`cdai: raw ai output\n${raw}\n`);
   const answer = parseAiAnswer(raw);
-  if (answer === null) return { kind: 'none', why: 'unparseable answer' };
+  if (answer === null) return { kind: 'none', why: excerpt(raw) };
   const reason = sanitizeReason(answer.reason);
   if (answer.path === null) return { kind: 'none', why: reason === '' ? 'no idea' : reason };
   const path = matchAiPath(answer.path, request.candidates);

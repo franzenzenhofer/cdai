@@ -1,11 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { isYear, tokenize, tokenizeArgs } from '../src/match/tokenize.js';
+import { hostLabel, hostReduced, isYear, tokenize, tokenizeArgs } from '../src/match/tokenize.js';
 
 describe('tokenize', () => {
   it('drops stopwords and keeps the search terms', () => {
     const parsed = tokenize('go to the petalworks folder');
     expect(parsed.tokens).toEqual(['petalworks']);
     expect(parsed.order).toBe('none');
+  });
+
+  it('searches a host by its name, not by its decoration', () => {
+    expect(hostLabel('lumenlab.com')).toBe('lumenlab');
+    expect(hostLabel('www.lumenlab.com')).toBe('lumenlab');
+    expect(hostLabel('https://www.lumenlab.com/blog')).toBe('lumenlab');
+    expect(hostLabel('shop.petalworks.at')).toBe('petalworks');
+    expect(hostLabel('petalworks.co.uk')).toBe('petalworks');
+  });
+
+  it('leaves a dotted word that is not a host alone', () => {
+    expect(hostLabel('node.js')).toBe('node.js');
+    expect(hostLabel('vite.config')).toBe('vite.config');
+    expect(hostLabel('.config')).toBe('.config');
+  });
+
+  it('keeps the typed word, because a directory can be named after the whole host', () => {
+    expect(tokenize('nordwind.at').tokens).toEqual(['nordwind.at']);
+    expect(tokenize('lumenlab.com website').tokens).toEqual(['lumenlab.com', 'website']);
+  });
+
+  it('offers the host reading as a second attempt, never as a replacement', () => {
+    expect(hostReduced(tokenize('lumenlab.com website'))?.tokens).toEqual(['lumenlab', 'website']);
+    expect(hostReduced(tokenize('the website of www.lumenlab.com'))?.tokens)
+      .toEqual(['website', 'lumenlab']);
+    expect(hostReduced(tokenize('petalworks 2025'))).toBeNull();
+    expect(hostReduced(tokenize('node.js'))).toBeNull();
   });
 
   it('preserves stopwords when they are the only possible directory name', () => {

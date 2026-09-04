@@ -7,7 +7,7 @@ import {
   type ScoreContext,
   type ScoredCandidate,
 } from './score.js';
-import type { ParsedQuery } from './tokenize.js';
+import { hostReduced, type ParsedQuery } from './tokenize.js';
 import type { DirIndex } from '../store/indexer.js';
 import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
@@ -140,15 +140,26 @@ export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
   return { kind: 'unsure', candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
 
+/** Every reading of the query, best understood first: what was typed, then hosts as names. */
+const readings = (query: ParsedQuery): ParsedQuery[] => {
+  const reduced = hostReduced(query);
+  return reduced === null ? [query] : [query, reduced];
+};
+
 /** Best guesses for the AI tier when the strict matcher came back empty handed. */
-export const looseCandidates = (query: ParsedQuery, input: ResolveInput): ScoredCandidate[] =>
-  buildCandidates(input)
-    .map((candidate) => ({ candidate, score: looseScore(query, candidate) }))
+export const looseCandidates = (query: ParsedQuery, input: ResolveInput): ScoredCandidate[] => {
+  const queries = readings(query);
+  return buildCandidates(input)
+    .map((candidate) => ({
+      candidate,
+      score: Math.max(...queries.map((reading) => looseScore(reading, candidate))),
+    }))
     .filter((scored) => scored.score > 0)
     .sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path))
     .slice(0, LIMIT.aiFuzzy);
+};
 
-export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision => {
+const resolveReading = (query: ParsedQuery, input: ResolveInput): Decision => {
   const context: ScoreContext = {
     cwd: input.cwd,
     frecencyByPath: frecencyMap(input.db, input.nowSeconds),
@@ -162,4 +173,17 @@ export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision 
   }
   const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
   return decide(ranked);
+};
+
+/**
+ * A literal directory name always outranks a derived one. "nordwind.at" is a real folder here, so
+ * the typed word decides first and the host reading only speaks when nothing answered at all.
+ */
+export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision => {
+  const literal = resolveReading(query, input);
+  if (literal.kind !== 'unsure') return literal;
+  const reduced = hostReduced(query);
+  if (reduced === null) return literal;
+  const host = resolveReading(reduced, input);
+  return host.kind === 'unsure' && host.candidates.length === 0 ? literal : host;
 };

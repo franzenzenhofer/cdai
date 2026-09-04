@@ -51,6 +51,18 @@ describe('resolveQuery', () => {
     expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.clients}/petalworks`);
   });
 
+  it('prefers the folder literally named after the host over the host reading', () => {
+    const decision = run('nordwind.at');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.clients}/nordwind.at`);
+  });
+
+  it('reads a host as a name only when the literal word matches nothing', () => {
+    const decision = run('orbit.com website');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.clients}/orbit-website`);
+  });
+
   it('offers a picker when two different places match', () => {
     const decision = run('tictac');
     expect(decision.kind).toBe('choose');
