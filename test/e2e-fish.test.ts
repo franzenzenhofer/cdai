@@ -88,6 +88,19 @@ describe.skipIf(FISH === null)('cdai in a real fish', () => {
     expect(quoted.stdout.trim()).toBe(target);
   });
 
+  it('cds to the directory of a file spelled out among the words', () => {
+    const squash = `${fixture.projects}/squash`;
+    const spelled = runFish(`cdai open this ${squash}/readme.md; pwd`);
+    expect(spelled.status).toBe(0);
+    expect(spelled.stdout.trim()).toBe(squash);
+    expect(spelled.stderr).not.toContain('cd:');
+    expect(runFish(`cdai ${squash}/readme.md; pwd`).stdout.trim()).toBe(squash);
+    expect(runFish(`cdai open this ${squash}; pwd`).stdout.trim()).toBe(squash);
+    const known = runFish('cdai ./dev/squa; pwd');
+    expect(known.stdout.trim()).toBe(squash);
+    expect(known.stderr).not.toContain('cd:');
+  });
+
   it('keeps explicit missing paths native-only', () => {
     const run = runFish('cdai ./definitely-missing; echo exit=$status');
     expect(run.stdout.trim()).toBe('exit=1');

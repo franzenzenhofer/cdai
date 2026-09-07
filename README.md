@@ -104,9 +104,11 @@ $ cdai that client with the flowers
 | `cdai https://tidewheel.orbit.dev` | jump to the project behind a pasted URL |
 | `cdai https://github.com/octocat/tidewheel` | a link is named by what it points at, then by its host |
 | `cdai file:///Users/me/dev` | cd into a directory pasted as a `file://` URL |
+| `cdai open this ~/dev/2026-09-07/newsletter.html` | a path pasted among the words wins, and a file means its directory |
 | `cdai alias add -- the nudge game` | remember this directory under a name nothing could guess |
 | `cdai -P petal` | resolve the match to its physical path, following symlinks |
-| `cdai ~/some/dir` | use native `cd`; explicit paths are never guessed |
+| `cdai ./dev/squa` | a path `cd` cannot take is still read as the names it carries |
+| `cdai ~/some/dir` | native `cd` first; a path it can take is never guessed |
 | `cdai -` | use native `cd -` to return to the previous directory |
 | `cdai` | use native `cd` to return home |
 
@@ -133,9 +135,14 @@ history or crawls the filesystem.
 The shell wrapper always gives native behavior the first chance:
 
 - `cdai`, `cdai -`, explicit paths, CDPATH and zsh's `cd old new` substitution stay native.
+- Nothing fails on a `cd` error before every other tier has spoken. A path the builtin refuses is
+  read as the names its segments carry, and a path landing on a file means the directory holding
+  it, so `cdai ./dev/squa` and `cdai open this ~/2026-09-07/newsletter.html` both land.
+- The builtin's own error is the last word, not the first: it is printed only when the index,
+  memory and AI all had nothing, and only where `cd` could have taken those words at all.
 - `-L` preserves the logical symlink path; `-P` resolves symlinks to the physical path. Both
   compose with intent in zsh/Bash, and Fish support is feature-detected by version.
-- Stack syntax, late or invalid flags, and failed path-shaped input are never guessed.
+- Stack syntax and late or invalid flags are never guessed.
 - Existing local directories win even when their name is also a cdai command.
 - Human messages go to stderr; `cdai query` reserves stdout for the resolved path.
 
@@ -146,7 +153,8 @@ wrapper; `cdai doctor` reports stale or partial state and the exact repair comma
 
 ```text
 cdai [cd-options] <words> native cd first, then indexed/remembered/AI intent
-cdai <explicit/path>      native cd only; never fuzzy or AI-rerouted
+cdai <explicit/path>      native cd first; its error is kept only if nothing else answers
+cdai <words> <path>       a pasted path wins; a file resolves to its directory
 cdai query -- <words>     resolve only, prints the path on stdout
 cdai init <zsh|bash|fish> print the shell integration, meant for eval
 cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]

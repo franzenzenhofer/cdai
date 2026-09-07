@@ -92,6 +92,23 @@ var isDirectory = (path) => {
     return false;
   }
 };
+var isFile = (path) => {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+var PATH_SHAPED = /^~|\//u;
+var REMOTE_URL = /^(?!file:\/\/)[a-z][a-z0-9+.-]*:\/\//iu;
+var isPathShaped = (word) => fileUrlPath(word) !== null || !REMOTE_URL.test(word) && PATH_SHAPED.test(word);
+var spelledDirectory = (word) => {
+  const fileUrl = fileUrlPath(word);
+  if (fileUrl === null && (REMOTE_URL.test(word) || !PATH_SHAPED.test(word))) return null;
+  const path = absolutize(fileUrl ?? word);
+  if (isDirectory(path)) return path;
+  return isFile(path) ? dirname(path) : null;
+};
 var isProtocolSafePath = (path) => !/[\r\n]/u.test(path);
 var privateMode = (path, fallback) => {
   try {
@@ -345,7 +362,12 @@ var EXIT = {
   /** Something went wrong (no match, bad usage, unreadable config). */
   error: 1,
   /** A navigation request was handled but deliberately aborted, so the shell stays put. */
-  noCd: 3
+  noCd: 3,
+  /**
+   * Nothing here answered words the shell's own `cd` could have taken, and nothing was printed:
+   * the builtin's error is the truthful one and only the shell can word it.
+   */
+  native: 4
 };
 var emitPath = (path) => {
   process.stdout.write(`${path}
@@ -1275,7 +1297,13 @@ var STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
   "for",
-  "from"
+  "from",
+  // How a request is phrased when it points at something: "open this <path>", "show me <name>".
+  "open",
+  "this",
+  "that",
+  "show",
+  "me"
 ]);
 var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
 var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
@@ -1500,9 +1528,10 @@ var PATH_NOISE = /* @__PURE__ */ new Set([
   "master"
 ]);
 var URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
+var LOCAL_PATH = /^~|\//u;
 var PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
 var MIN_NAME_LENGTH = 2;
-var MAX_URL_READINGS = 4;
+var MAX_NAME_READINGS = 4;
 var isYear = (token) => {
   if (!YEAR_PATTERN.test(token)) return false;
   const value = Number.parseInt(token, 10);
@@ -1521,11 +1550,15 @@ var pathNames = (word) => {
   if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare)) return [];
   return bare.split("/").slice(1).map((segment) => (segment.split("?")[0] ?? "").replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && !/^\d+$/u.test(segment) && !PATH_NOISE.has(segment)).reverse();
 };
-var urlNames = (word) => [...pathNames(word), ...hostLabels(word)];
+var localNames = (word) => {
+  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word)) return [];
+  return word.split("/").map((segment) => segment.replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && segment !== ".." && !PATH_NOISE.has(segment)).reverse();
+};
+var spelledNames = (word) => [...pathNames(word), ...hostLabels(word), ...localNames(word)];
 var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
-var urlReadings = (query) => {
-  const names = query.tokens.map(urlNames);
-  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
+var nameReadings = (query) => {
+  const names = query.tokens.map(spelledNames);
+  const depth = Math.min(MAX_NAME_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings2 = [];
   for (let level = 0; level < depth; level += 1) {
     const tokens = query.tokens.map((token, index) => {
@@ -1691,7 +1724,7 @@ var decide = (ranked) => {
   }
   return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
-var readings = (query) => [query, ...urlReadings(query)];
+var readings = (query) => [query, ...nameReadings(query)];
 var looseCandidates = (query, input) => {
   const queries = readings(query);
   return buildCandidates(input).map((candidate) => ({
@@ -1758,7 +1791,7 @@ var CLI_CONTROLS = [
 ];
 var CLI_CONTROL_PATTERN = CLI_CONTROLS.join("|");
 var CLI_CONTROL_WORDS = CLI_CONTROLS.join(" ");
-var URL_WORD_PATTERN = "(^|[[:space:]])[a-zA-Z][a-zA-Z0-9+.-]*://";
+var CD_MAX_NATIVE_ARGS = 2;
 var ZSH_CD_FLAG_CHARS = "qLsP";
 var BASH_CD_FLAG_CHARS = "LPe@";
 var BASH_PORTABLE_CD_FLAG_CHARS = "LP";
@@ -2204,9 +2237,28 @@ var buildAiRequest = (input) => {
   return { prompt, candidates };
 };
 
+// src/match/literal.ts
+var namedDirectory = (args) => {
+  const first = args.length === 1 ? args[0] : void 0;
+  if (first === void 0) return null;
+  const path = absolutize(fileUrlPath(first) ?? first);
+  return isDirectory(path) ? path : null;
+};
+var spelledPlace = (args) => {
+  const named = namedDirectory(args);
+  if (named !== null) return named;
+  for (const arg of args) {
+    const place = spelledDirectory(arg);
+    if (place !== null) return place;
+  }
+  return null;
+};
+var nativeCdWords = (args) => args.length <= CD_MAX_NATIVE_ARGS && args.some(isPathShaped);
+
 // src/commands/query.ts
 var MILLIS_PER_SECOND4 = 1e3;
-var suggest = (ranked, raw) => {
+var suggest = (ranked, raw, native) => {
+  if (native) return EXIT.native;
   fail(`no match for "${raw}"`);
   const guesses = ranked.slice(0, LIMIT.suggestions);
   if (guesses.length === 0) {
@@ -2260,8 +2312,8 @@ var declineHeadlessAi = () => {
 var aiTier = async (strict, context) => {
   const { ai } = context.config;
   const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
-  if (!ai.enabled) return suggest(ranked, context.query.raw);
-  if (!hasTty()) return declineHeadlessAi();
+  if (!ai.enabled) return suggest(ranked, context.query.raw, context.native);
+  if (!hasTty()) return context.native ? EXIT.native : declineHeadlessAi();
   const request = buildAiRequest({
     query: context.query.raw,
     cwd: process.cwd(),
@@ -2270,18 +2322,18 @@ var aiTier = async (strict, context) => {
     nowSeconds: context.nowSeconds,
     roots: context.config.roots.map((root) => root.path)
   });
-  if (request.candidates.length === 0) return suggest(ranked, context.query.raw);
+  if (request.candidates.length === 0) return suggest(ranked, context.query.raw, context.native);
   const backend2 = resolveAiBackend(ai);
   if (backend2 === null) {
     const label = ai.command === "auto" ? "no supported AI backend found" : `${ai.command} unavailable`;
     note(`cdai: ${label}, staying deterministic`);
-    return suggest(ranked, context.query.raw);
+    return suggest(ranked, context.query.raw, context.native);
   }
   note(`cdai: thinking... (${backendLabel(backend2)})`);
   const outcome = await askAi(request, backend2, ai.timeoutMs);
   if (outcome.kind === "none") {
     note(`cdai: ai had no usable answer (${outcome.why})`);
-    return suggest(ranked, context.query.raw);
+    return suggest(ranked, context.query.raw, context.native);
   }
   return acceptAi(outcome, context);
 };
@@ -2308,28 +2360,23 @@ var freshIndex = (config) => {
   if (matchesConfig(index, config)) return { index, refreshed: false };
   return { index: refreshIndex(config), refreshed: true };
 };
-var searchInput = (args) => {
+var searchInput = (args, native) => {
   const query = tokenizeArgs(args);
   if (query.tokens.length === 0) {
-    fail("nothing to search for", "usage: cdai <words describing the directory>");
+    if (!native) fail("nothing to search for", "usage: cdai <words describing the directory>");
     return null;
   }
   const config = loadConfig();
   if (config.roots.length > 0) return { query, config };
-  fail("no roots configured", "run `cdai setup` once to pick the directories to learn");
+  if (!native) fail("no roots configured", "run `cdai setup` once to pick the directories to learn");
   return null;
 };
-var namedDirectory = (args) => {
-  const first = args.length === 1 ? args[0] : void 0;
-  if (first === void 0) return null;
-  const path = absolutize(fileUrlPath(first) ?? first);
-  return isDirectory(path) ? path : null;
-};
 var runQuery = async (args) => {
-  const named = namedDirectory(args);
+  const named = spelledPlace(args);
   if (named !== null) return jumpKnown(named);
-  const search = searchInput(args);
-  if (search === null) return EXIT.error;
+  const native = nativeCdWords(args);
+  const search = searchInput(args, native);
+  if (search === null) return native ? EXIT.native : EXIT.error;
   const { query, config } = search;
   const db = ingest();
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND4);
@@ -2338,7 +2385,7 @@ var runQuery = async (args) => {
   let input = { index: initial.index, db, cwd: process.cwd(), nowSeconds };
   let decision = resolveQuery(query, input);
   if (decision.kind === "unsure") {
-    const recalled = recalledAlias({ query, config, db, nowSeconds, input });
+    const recalled = recalledAlias({ query, config, db, nowSeconds, input, native });
     if (recalled !== null) return recalled;
   }
   if (!refreshed && decision.kind === "unsure" && isStale(input.index, Date.now())) {
@@ -2346,7 +2393,7 @@ var runQuery = async (args) => {
     refreshed = true;
     decision = resolveQuery(query, input);
   }
-  return finish(decision, { query, config, db, nowSeconds, input }, refreshed);
+  return finish(decision, { query, config, db, nowSeconds, input, native }, refreshed);
 };
 
 // src/commands/setup.ts
@@ -2504,8 +2551,8 @@ var explicitRootConfigs = (options) => {
   }
   return roots;
 };
-var setupCandidates = (existing, explicit4, detected) => {
-  const candidates = new Map(explicit4.map((root) => [root.path, root]));
+var setupCandidates = (existing, explicit, detected) => {
+  const candidates = new Map(explicit.map((root) => [root.path, root]));
   for (const root of detected) {
     if (!candidates.has(root.path) && !existing.some((known) => known.path === root.path)) {
       candidates.set(root.path, root);
@@ -2558,21 +2605,21 @@ var writeSetup = (existing, options, candidates) => {
   return saveAndReport(config, removed);
 };
 var planSetup = (existing, options) => {
-  const explicit4 = explicitRootConfigs(options);
-  if (explicit4 === null) return null;
+  const explicit = explicitRootConfigs(options);
+  if (explicit === null) return null;
   const removed = options.removeRoots.map(absolutize);
   const unknown = removed.find((path) => !existing.roots.some((root) => root.path === path));
   if (unknown !== void 0) {
     fail(`root is not configured: ${contractTilde(unknown)}`);
     return null;
   }
-  if (explicit4.some((root) => removed.includes(root.path))) {
+  if (explicit.some((root) => removed.includes(root.path))) {
     fail("the same root cannot be added and removed in one setup command");
     return null;
   }
   const retained = existing.roots.filter((root) => !removed.includes(root.path));
   const detected = detectRoots().filter((root) => !removed.includes(root.path));
-  return { candidates: setupCandidates(retained, explicit4, detected), explicit: explicit4, removed };
+  return { candidates: setupCandidates(retained, explicit, detected), explicit, removed };
 };
 var runSetup = (args) => {
   const parsed = parseSetupOptions(args);
@@ -2671,15 +2718,6 @@ var parser = () => `__cdai_parse() {
     fi
   done
 }`;
-var explicit = () => `_CDAI_URL='${URL_WORD_PATTERN}'
-__cdai_explicit() {
-  local arg
-  for arg in "\${_CDAI_QUERY[@]}"; do
-    [[ "$arg" =~ $_CDAI_URL ]] && continue
-    [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
-  done
-  return 1
-}`;
 var nativeError = () => `__cdai_native_error() {
   local output status
   output="$(builtin cd "$@" 2>&1)"
@@ -2702,12 +2740,18 @@ var jumper = () => `cdai() {
     __cdai_native_error "$@"
     return $?
   fi
-  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ] || __cdai_explicit; then
+  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ]; then
     __cdai_native_error "$@"
     return $?
   fi
-  local result
-  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  local result status
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")"
+  status=$?
+  if [ "$status" -eq ${EXIT.native} ]; then
+    __cdai_native_error "$@"
+    return $?
+  fi
+  [ "$status" -ne 0 ] && return "$status"
   [ -n "$result" ] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 var managementCompleter = () => `if [ "$COMP_CWORD" -ge 2 ]; then
@@ -2791,8 +2835,6 @@ ${flagDetection()}
 
 ${parser()}
 
-${explicit()}
-
 ${nativeError()}
 
 ${jumper()}
@@ -2874,25 +2916,10 @@ var argumentParser = () => `function __cdai_parse
     end
     return 0
 end`;
-var explicit2 = () => `set -g _CDAI_URL '${URL_WORD_PATTERN}'
-function __cdai_explicit
-    for arg in $_CDAI_QUERY
-        if string match -qr -- $_CDAI_URL "$arg"
-            continue
-        end
-        if string match -qr '(^~|/)' -- "$arg"
-            return 0
-        end
-    end
-    return 1
-end`;
 var parser2 = () => `${flagDetection2()}
 
-${argumentParser()}
-
-${explicit2()}`;
-var jumper2 = () => `function cdai
-    if test (count $argv) -gt 0; and contains -- "$argv[1]" --help -h --version -v
+${argumentParser()}`;
+var controls = () => `    if test (count $argv) -gt 0; and contains -- "$argv[1]" --help -h --version -v
         __cdai_run $argv
         return $status
     end
@@ -2903,19 +2930,28 @@ var jumper2 = () => `function cdai
         end
         __cdai_run $argv
         return $status
-    end
+    end`;
+var jumper2 = () => `function cdai
+${controls()}
     cd $argv 2>/dev/null
     and return
     if not __cdai_parse $argv
         cd $argv
         return $status
     end
-    if test (count $_CDAI_QUERY) -eq 0; or __cdai_explicit
+    if test (count $_CDAI_QUERY) -eq 0
         cd $argv
         return $status
     end
     set -l result (__cdai_run query -- $_CDAI_QUERY)
-    or return $status
+    set -l result_status $status
+    if test $result_status -eq ${EXIT.native}
+        cd $argv
+        return $status
+    end
+    if test $result_status -ne 0
+        return $result_status
+    end
     if test -n "$result"
         cd $_CDAI_CD_FLAGS -- "$result"
     end
@@ -3054,15 +3090,6 @@ var parser3 = () => `__cdai_parse() {
     fi
   done
 }`;
-var explicit3 = () => `typeset -g _CDAI_URL='${URL_WORD_PATTERN}'
-__cdai_explicit() {
-  local arg
-  for arg in "\${_CDAI_QUERY[@]}"; do
-    [[ "$arg" =~ $_CDAI_URL ]] && continue
-    [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
-  done
-  return 1
-}`;
 var nativeError2 = () => `__cdai_native_error() {
   local output result_status
   output="$(builtin cd "$@" 2>&1)"
@@ -3072,8 +3099,7 @@ var nativeError2 = () => `__cdai_native_error() {
   [[ -n "$output" ]] && print -u2 -- "cdai: cd: $output"
   return $result_status
 }`;
-var jumper3 = () => `cdai() {
-  if (( $# > 0 )) && [[ "$1" == (--help|-h|--version|-v) ]]; then
+var controls2 = () => `  if (( $# > 0 )) && [[ "$1" == (--help|-h|--version|-v) ]]; then
     __cdai_run "$@"
     return $?
   fi
@@ -3083,18 +3109,26 @@ var jumper3 = () => `cdai() {
     fi
     __cdai_run "$@"
     return $?
-  fi
+  fi`;
+var jumper3 = () => `cdai() {
+${controls2()}
   builtin cd "$@" 2>/dev/null && return
   if ! __cdai_parse "$@"; then
     __cdai_native_error "$@"
     return $?
   fi
-  if (( \${#_CDAI_QUERY} == 0 )) || __cdai_explicit; then
+  if (( \${#_CDAI_QUERY} == 0 )); then
     __cdai_native_error "$@"
     return $?
   fi
-  local result
-  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  local result result_status
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")"
+  result_status=$?
+  if (( result_status == ${EXIT.native} )); then
+    __cdai_native_error "$@"
+    return $?
+  fi
+  (( result_status != 0 )) && return $result_status
   [[ -n "$result" ]] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 var completer3 = () => `__cdai_complete() {
@@ -3139,8 +3173,6 @@ ${runner3()}
 
 ${parser3()}
 
-${explicit3()}
-
 ${nativeError2()}
 
 ${jumper3()}
@@ -3151,7 +3183,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.10",
+  version: "0.3.11",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {
@@ -3208,7 +3240,8 @@ var USAGE = [
   "",
   "usage:",
   "  cdai [cd-options] <words> jump using native cd first, then index/memory/AI intent",
-  "  cdai <explicit/path>      native cd only; explicit paths are never guessed",
+  "  cdai <explicit/path>      native cd first; its error is kept only if nothing else answers",
+  "  cdai <words> <path>       a pasted path wins; a file resolves to its directory",
   "  cdai query -- <words>     resolve only, prints the path on stdout",
   "  cdai init <zsh|bash|fish> print the shell integration, meant for eval",
   "  cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <n>]",

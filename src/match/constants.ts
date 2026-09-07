@@ -78,6 +78,12 @@ export const STOPWORDS = new Set([
   'an',
   'for',
   'from',
+  // How a request is phrased when it points at something: "open this <path>", "show me <name>".
+  'open',
+  'this',
+  'that',
+  'show',
+  'me',
 ]);
 
 export const LATEST_WORDS = new Set(['latest', 'newest', 'last', 'recent']);

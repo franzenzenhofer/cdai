@@ -12,6 +12,7 @@ import packageJson from '../package.json' with { type: 'json' };
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');
 const NOW = 1_800_000_000;
+const EXIT_NATIVE = 4;
 
 let fixture: Fixture;
 
@@ -250,6 +251,40 @@ describe('cli surface', () => {
     const encoded = `file://${join(fixture.projects, 'space%20dir%20with%20spaces')}`;
     expect(runCli('query', '--', encoded).stdout.trim())
       .toBe(join(fixture.projects, 'space dir with spaces'));
+  });
+
+  it('answers with the directory of a location spelled among the words', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const squash = join(fixture.projects, 'squash');
+    const readme = join(squash, 'readme.md');
+    expect(runCli('query', '--', 'open', 'this', readme).stdout.trim()).toBe(squash);
+    expect(runCli('query', '--', readme).stdout.trim()).toBe(squash);
+    expect(runCli('query', '--', 'open', 'this', `file://${readme}`).stdout.trim()).toBe(squash);
+    expect(runCli('query', '--', 'open', 'this', squash).stdout.trim()).toBe(squash);
+    // A word that spells nothing on disk stays a search term, so intent still decides.
+    expect(runCli('query', '--', 'open', 'this', 'petalworks', 'folder').stdout.trim())
+      .toBe(join(fixture.clients, 'petalworks'));
+    const missing = runCli('query', '--', 'open', 'this', './definitely-missing');
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toBe('');
+  });
+
+  it('answers a path cd cannot take, and stays silent when nothing knows it', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const resolved = runCli('query', '--', './dev/squa');
+    expect(resolved.status).toBe(0);
+    expect(resolved.stdout.trim()).toBe(join(fixture.projects, 'squash'));
+    // Nothing answered words cd could have carried: the shell owns that error, so we print none.
+    const unknown = runCli('query', '--', './definitely-missing');
+    expect(unknown.status).toBe(EXIT_NATIVE);
+    expect(unknown.stdout).toBe('');
+    expect(unknown.stderr).toBe('');
+    // Beyond cd's own arity there is no builtin error to defer to, so the miss is reported.
+    const words = runCli('query', '--', 'open', 'this', './definitely-missing');
+    expect(words.status).toBe(1);
+    expect(words.stderr).toContain('no match');
   });
 
   it('keeps completion cached, rejects stale history, and invalidates changed config', () => {

@@ -6,14 +6,8 @@ import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
 import { tokenize, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import {
-  absolutize,
-  contractTilde,
-  fileUrlPath,
-  isDirectory,
-  isProtocolSafePath,
-  isUnderRoot,
-} from '../paths.js';
+import { contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '../paths.js';
+import { nativeCdWords, spelledPlace } from '../match/literal.js';
 import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
@@ -34,9 +28,16 @@ interface QueryContext {
   readonly db: Db;
   readonly nowSeconds: number;
   readonly input: ResolveInput;
+  /** The shell can word this failure better than we can, so a miss says nothing at all. */
+  readonly native: boolean;
 }
 
-const suggest = (ranked: readonly ScoredCandidate[], raw: string): ExitCode => {
+const suggest = (
+  ranked: readonly ScoredCandidate[],
+  raw: string,
+  native: boolean,
+): ExitCode => {
+  if (native) return EXIT.native;
   fail(`no match for "${raw}"`);
   const guesses = ranked.slice(0, LIMIT.suggestions);
   if (guesses.length === 0) {
@@ -101,8 +102,8 @@ const declineHeadlessAi = (): ExitCode => {
 const aiTier = async (strict: readonly ScoredCandidate[], context: QueryContext): Promise<ExitCode> => {
   const { ai } = context.config;
   const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
-  if (!ai.enabled) return suggest(ranked, context.query.raw);
-  if (!hasTty()) return declineHeadlessAi();
+  if (!ai.enabled) return suggest(ranked, context.query.raw, context.native);
+  if (!hasTty()) return context.native ? EXIT.native : declineHeadlessAi();
   const request = buildAiRequest({
     query: context.query.raw,
     cwd: process.cwd(),
@@ -111,18 +112,18 @@ const aiTier = async (strict: readonly ScoredCandidate[], context: QueryContext)
     nowSeconds: context.nowSeconds,
     roots: context.config.roots.map((root) => root.path),
   });
-  if (request.candidates.length === 0) return suggest(ranked, context.query.raw);
+  if (request.candidates.length === 0) return suggest(ranked, context.query.raw, context.native);
   const backend = resolveAiBackend(ai);
   if (backend === null) {
     const label = ai.command === 'auto' ? 'no supported AI backend found' : `${ai.command} unavailable`;
     note(`cdai: ${label}, staying deterministic`);
-    return suggest(ranked, context.query.raw);
+    return suggest(ranked, context.query.raw, context.native);
   }
   note(`cdai: thinking... (${backendLabel(backend)})`);
   const outcome = await askAi(request, backend, ai.timeoutMs);
   if (outcome.kind === 'none') {
     note(`cdai: ai had no usable answer (${outcome.why})`);
-    return suggest(ranked, context.query.raw);
+    return suggest(ranked, context.query.raw, context.native);
   }
   return acceptAi(outcome, context);
 };
@@ -167,31 +168,24 @@ interface SearchInput {
   readonly config: Config;
 }
 
-const searchInput = (args: readonly string[]): SearchInput | null => {
+const searchInput = (args: readonly string[], native: boolean): SearchInput | null => {
   const query = tokenizeArgs(args);
   if (query.tokens.length === 0) {
-    fail('nothing to search for', 'usage: cdai <words describing the directory>');
+    if (!native) fail('nothing to search for', 'usage: cdai <words describing the directory>');
     return null;
   }
   const config = loadConfig();
   if (config.roots.length > 0) return { query, config };
-  fail('no roots configured', 'run `cdai setup` once to pick the directories to learn');
+  if (!native) fail('no roots configured', 'run `cdai setup` once to pick the directories to learn');
   return null;
 };
 
-/** The one thing a lone argument can name outright: an existing directory, spelled either way. */
-const namedDirectory = (args: readonly string[]): string | null => {
-  const first = args.length === 1 ? args[0] : undefined;
-  if (first === undefined) return null;
-  const path = absolutize(fileUrlPath(first) ?? first);
-  return isDirectory(path) ? path : null;
-};
-
 export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
-  const named = namedDirectory(args);
+  const named = spelledPlace(args);
   if (named !== null) return jumpKnown(named);
-  const search = searchInput(args);
-  if (search === null) return EXIT.error;
+  const native = nativeCdWords(args);
+  const search = searchInput(args, native);
+  if (search === null) return native ? EXIT.native : EXIT.error;
   const { query, config } = search;
   const db = ingest();
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
@@ -200,7 +194,7 @@ export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
   let input: ResolveInput = { index: initial.index, db, cwd: process.cwd(), nowSeconds };
   let decision = resolveQuery(query, input);
   if (decision.kind === 'unsure') {
-    const recalled = recalledAlias({ query, config, db, nowSeconds, input });
+    const recalled = recalledAlias({ query, config, db, nowSeconds, input, native });
     if (recalled !== null) return recalled;
   }
   if (!refreshed && decision.kind === 'unsure' && isStale(input.index, Date.now())) {
@@ -208,5 +202,5 @@ export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
     refreshed = true;
     decision = resolveQuery(query, input);
   }
-  return finish(decision, { query, config, db, nowSeconds, input }, refreshed);
+  return finish(decision, { query, config, db, nowSeconds, input, native }, refreshed);
 };

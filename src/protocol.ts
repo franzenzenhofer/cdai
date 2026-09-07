@@ -11,6 +11,11 @@ export const EXIT = {
   error: 1,
   /** A navigation request was handled but deliberately aborted, so the shell stays put. */
   noCd: 3,
+  /**
+   * Nothing here answered words the shell's own `cd` could have taken, and nothing was printed:
+   * the builtin's error is the truthful one and only the shell can word it.
+   */
+  native: 4,
 } as const;
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];

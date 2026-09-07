@@ -1,9 +1,9 @@
 import { dataDir } from '../paths.js';
+import { EXIT } from '../protocol.js';
 import {
   BASH_PORTABLE_CD_FLAG_CHARS,
   CLI_CONTROL_PATTERN,
   CLI_CONTROL_WORDS,
-  URL_WORD_PATTERN,
 } from './control.js';
 import { shellQuote } from './quote.js';
 
@@ -73,16 +73,6 @@ const parser = (): string => `__cdai_parse() {
   done
 }`;
 
-const explicit = (): string => `_CDAI_URL='${URL_WORD_PATTERN}'
-__cdai_explicit() {
-  local arg
-  for arg in "\${_CDAI_QUERY[@]}"; do
-    [[ "$arg" =~ $_CDAI_URL ]] && continue
-    [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
-  done
-  return 1
-}`;
-
 const nativeError = (): string => `__cdai_native_error() {
   local output status
   output="$(builtin cd "$@" 2>&1)"
@@ -106,12 +96,18 @@ const jumper = (): string => `cdai() {
     __cdai_native_error "$@"
     return $?
   fi
-  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ] || __cdai_explicit; then
+  if [ "\${#_CDAI_QUERY[@]}" -eq 0 ]; then
     __cdai_native_error "$@"
     return $?
   fi
-  local result
-  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  local result status
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")"
+  status=$?
+  if [ "$status" -eq ${EXIT.native} ]; then
+    __cdai_native_error "$@"
+    return $?
+  fi
+  [ "$status" -ne 0 ] && return "$status"
   [ -n "$result" ] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 
@@ -202,8 +198,6 @@ ${runner()}
 ${flagDetection()}
 
 ${parser()}
-
-${explicit()}
 
 ${nativeError()}
 

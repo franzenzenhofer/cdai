@@ -7,7 +7,7 @@ import {
   type ScoreContext,
   type ScoredCandidate,
 } from './score.js';
-import { urlReadings, type ParsedQuery } from './tokenize.js';
+import { nameReadings, type ParsedQuery } from './tokenize.js';
 import type { DirIndex } from '../store/indexer.js';
 import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
@@ -140,8 +140,8 @@ export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
   return { kind: 'unsure', candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
 
-/** Every reading of the query, best understood first: what was typed, then URLs as names. */
-const readings = (query: ParsedQuery): ParsedQuery[] => [query, ...urlReadings(query)];
+/** Every reading of the query, best understood first: what was typed, then its words as names. */
+const readings = (query: ParsedQuery): ParsedQuery[] => [query, ...nameReadings(query)];
 
 /** Best guesses for the AI tier when the strict matcher came back empty handed. */
 export const looseCandidates = (query: ParsedQuery, input: ResolveInput): ScoredCandidate[] => {

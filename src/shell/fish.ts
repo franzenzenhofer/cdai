@@ -1,5 +1,6 @@
 import { dataDir } from '../paths.js';
-import { CLI_CONTROL_WORDS, URL_WORD_PATTERN } from './control.js';
+import { EXIT } from '../protocol.js';
+import { CLI_CONTROL_WORDS } from './control.js';
 import { fishQuote } from './quote.js';
 import { fishSmartTab } from './fish-smart-tab.js';
 
@@ -46,23 +47,10 @@ const argumentParser = (): string => `function __cdai_parse
     return 0
 end`;
 
-const explicit = (): string => `set -g _CDAI_URL '${URL_WORD_PATTERN}'
-function __cdai_explicit
-    for arg in $_CDAI_QUERY
-        if string match -qr -- $_CDAI_URL "$arg"
-            continue
-        end
-        if string match -qr '(^~|/)' -- "$arg"
-            return 0
-        end
-    end
-    return 1
-end`;
+const parser = (): string => `${flagDetection()}\n\n${argumentParser()}`;
 
-const parser = (): string => `${flagDetection()}\n\n${argumentParser()}\n\n${explicit()}`;
-
-const jumper = (): string => `function cdai
-    if test (count $argv) -gt 0; and contains -- "$argv[1]" --help -h --version -v
+/** Words the executable owns, plus the local directory that may happen to share their name. */
+const controls = (): string => `    if test (count $argv) -gt 0; and contains -- "$argv[1]" --help -h --version -v
         __cdai_run $argv
         return $status
     end
@@ -73,19 +61,33 @@ const jumper = (): string => `function cdai
         end
         __cdai_run $argv
         return $status
-    end
+    end`;
+
+/**
+ * Native `cd` first, then every tier cdai has, and only then the builtin's own complaint: a path
+ * cd cannot take may still be a place this machine knows, and exit ${EXIT.native} says nobody knew it.
+ */
+const jumper = (): string => `function cdai
+${controls()}
     cd $argv 2>/dev/null
     and return
     if not __cdai_parse $argv
         cd $argv
         return $status
     end
-    if test (count $_CDAI_QUERY) -eq 0; or __cdai_explicit
+    if test (count $_CDAI_QUERY) -eq 0
         cd $argv
         return $status
     end
     set -l result (__cdai_run query -- $_CDAI_QUERY)
-    or return $status
+    set -l result_status $status
+    if test $result_status -eq ${EXIT.native}
+        cd $argv
+        return $status
+    end
+    if test $result_status -ne 0
+        return $result_status
+    end
     if test -n "$result"
         cd $_CDAI_CD_FLAGS -- "$result"
     end

@@ -49,10 +49,12 @@ const PATH_NOISE = new Set([
   'docs', 'doc', 'level', 'tag', 'tags', 'category', 'search', 'www', 'main', 'master',
 ]);
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
+/** A word spelled as a location on this machine rather than as a name. */
+const LOCAL_PATH = /^~|\//u;
 const PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
 const MIN_NAME_LENGTH = 2;
-/** A URL has at most this many readings, so one pasted link cannot fan the resolver out. */
-const MAX_URL_READINGS = 4;
+/** A word has at most this many readings, so one pasted link cannot fan the resolver out. */
+const MAX_NAME_READINGS = 4;
 
 export const isYear = (token: string): boolean => {
   if (!YEAR_PATTERN.test(token)) return false;
@@ -98,11 +100,27 @@ export const pathNames = (word: string): string[] => {
 };
 
 /**
- * Every name one word can stand for, most specific first: what the link points at, then what
- * hosts it. "franzai.com/writer" is the writer, not the site around it; when the path names
- * nothing on this machine the host still answers.
+ * The names a spelled-out filesystem path carries, deepest first. A path leading nowhere still
+ * describes where the user meant to go: "./dev/petalwroks" says a folder called something like
+ * "petalwroks" sits inside "dev", and no tier can see that while the separators are in the way.
  */
-export const urlNames = (word: string): string[] => [...pathNames(word), ...hostLabels(word)];
+export const localNames = (word: string): string[] => {
+  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word)) return [];
+  return word
+    .split('/')
+    .map((segment) => segment.replace(PAGE_SUFFIX, ''))
+    .filter((segment) => segment.length >= MIN_NAME_LENGTH
+      && segment !== '..'
+      && !PATH_NOISE.has(segment))
+    .reverse();
+};
+
+/**
+ * Every name one word can stand for, most specific first: what a link points at, what hosts it,
+ * and what a typed-out path calls the place at its end.
+ */
+export const spelledNames = (word: string): string[] =>
+  [...pathNames(word), ...hostLabels(word), ...localNames(word)];
 
 export const splitWords = (input: string): string[] =>
   input
@@ -116,9 +134,9 @@ export const splitWords = (input: string): string[] =>
  * "nordwind.at", "amt.gv.at" - so the word the user typed always gets the first attempt; these
  * readings are only tried when that finds nothing.
  */
-export const urlReadings = (query: ParsedQuery): ParsedQuery[] => {
-  const names = query.tokens.map(urlNames);
-  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
+export const nameReadings = (query: ParsedQuery): ParsedQuery[] => {
+  const names = query.tokens.map(spelledNames);
+  const depth = Math.min(MAX_NAME_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings: ParsedQuery[] = [];
   for (let level = 0; level < depth; level += 1) {
     const tokens = query.tokens.map((token, index) => {

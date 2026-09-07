@@ -5,7 +5,8 @@ import {
   pathNames,
   tokenize,
   tokenizeArgs,
-  urlReadings,
+  localNames,
+  nameReadings,
 } from '../src/match/tokenize.js';
 
 describe('tokenize', () => {
@@ -13,6 +14,8 @@ describe('tokenize', () => {
     const parsed = tokenize('go to the petalworks folder');
     expect(parsed.tokens).toEqual(['petalworks']);
     expect(parsed.order).toBe('none');
+    expect(tokenize('open this petalworks folder').tokens).toEqual(['petalworks']);
+    expect(tokenize('show me that petalworks project').tokens).toEqual(['petalworks']);
   });
 
   it('searches a host by its name, not by its decoration', () => {
@@ -54,7 +57,7 @@ describe('tokenize', () => {
 
   it('offers the URL readings as later attempts, never as a replacement', () => {
     const readings = (input: string): string[][] =>
-      urlReadings(tokenize(input)).map((reading) => [...reading.tokens]);
+      nameReadings(tokenize(input)).map((reading) => [...reading.tokens]);
     expect(readings('lumenlab.com website')).toEqual([['lumenlab', 'website']]);
     expect(readings('the website of www.lumenlab.com')).toEqual([['website', 'lumenlab']]);
     expect(readings('https://tidewheel.orbit.dev/ game'))
@@ -68,9 +71,19 @@ describe('tokenize', () => {
     expect(readings('node.js')).toEqual([]);
   });
 
+  it('reads a typed-out path as the names its segments carry', () => {
+    expect(localNames('./dev/petalwroks')).toEqual(['petalwroks', 'dev']);
+    expect(localNames('~/clients/petalworks/06-workshop')).toEqual(['06-workshop', 'petalworks', 'clients']);
+    expect(localNames('/var/log/newsletter.html')).toEqual(['newsletter', 'log', 'var']);
+    // A bare name and a link are read by the rules that already own them.
+    expect(localNames('petalworks')).toEqual([]);
+    expect(localNames('https://tidewheel.orbit.dev/level/7')).toEqual([]);
+  });
+
   it('preserves stopwords when they are the only possible directory name', () => {
     expect(tokenize('project').tokens).toEqual(['project']);
     expect(tokenize('the folder').tokens).toEqual(['the', 'folder']);
+    expect(tokenize('open').tokens).toEqual(['open']);
   });
 
   it('preserves a lone operator or year as a literal directory name', () => {

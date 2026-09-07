@@ -1,8 +1,8 @@
 import { dataDir } from '../paths.js';
+import { EXIT } from '../protocol.js';
 import {
   CLI_CONTROL_PATTERN,
   CLI_CONTROL_WORDS,
-  URL_WORD_PATTERN,
   ZSH_CD_FLAG_CHARS,
 } from './control.js';
 import { shellQuote } from './quote.js';
@@ -39,16 +39,6 @@ const parser = (): string => `__cdai_parse() {
   done
 }`;
 
-const explicit = (): string => `typeset -g _CDAI_URL='${URL_WORD_PATTERN}'
-__cdai_explicit() {
-  local arg
-  for arg in "\${_CDAI_QUERY[@]}"; do
-    [[ "$arg" =~ $_CDAI_URL ]] && continue
-    [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
-  done
-  return 1
-}`;
-
 /**
  * zsh prefixes the message with the failing function, and adds a line number whenever that
  * function came from an eval - which is exactly how the integration is loaded. Both shapes are
@@ -64,8 +54,8 @@ const nativeError = (): string => `__cdai_native_error() {
   return $result_status
 }`;
 
-const jumper = (): string => `cdai() {
-  if (( $# > 0 )) && [[ "$1" == (--help|-h|--version|-v) ]]; then
+/** Words the executable owns, plus the local directory that may happen to share their name. */
+const controls = (): string => `  if (( $# > 0 )) && [[ "$1" == (--help|-h|--version|-v) ]]; then
     __cdai_run "$@"
     return $?
   fi
@@ -75,18 +65,31 @@ const jumper = (): string => `cdai() {
     fi
     __cdai_run "$@"
     return $?
-  fi
+  fi`;
+
+/**
+ * Native `cd` first, then every tier cdai has, and only then the builtin's own complaint: a path
+ * cd cannot take may still be a place this machine knows, and exit ${EXIT.native} says nobody knew it.
+ */
+const jumper = (): string => `cdai() {
+${controls()}
   builtin cd "$@" 2>/dev/null && return
   if ! __cdai_parse "$@"; then
     __cdai_native_error "$@"
     return $?
   fi
-  if (( \${#_CDAI_QUERY} == 0 )) || __cdai_explicit; then
+  if (( \${#_CDAI_QUERY} == 0 )); then
     __cdai_native_error "$@"
     return $?
   fi
-  local result
-  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")" || return $?
+  local result result_status
+  result="$(__cdai_run query -- "\${_CDAI_QUERY[@]}")"
+  result_status=$?
+  if (( result_status == ${EXIT.native} )); then
+    __cdai_native_error "$@"
+    return $?
+  fi
+  (( result_status != 0 )) && return $result_status
   [[ -n "$result" ]] && builtin cd "\${_CDAI_CD_FLAGS[@]}" -- "$result"
 }`;
 
@@ -136,8 +139,6 @@ ${recorder()}
 ${runner()}
 
 ${parser()}
-
-${explicit()}
 
 ${nativeError()}
 

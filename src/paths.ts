@@ -114,6 +114,37 @@ export const isDirectory = (path: string): boolean => {
   }
 };
 
+export const isFile = (path: string): boolean => {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/** A word that spells a location instead of naming one: `/x`, `./x`, `x/y`, `~/x`. */
+const PATH_SHAPED = /^~|\//u;
+/** Any URL that is not `file://` points at the web, where no directory of this machine lives. */
+const REMOTE_URL = /^(?!file:\/\/)[a-z][a-z0-9+.-]*:\/\//iu;
+
+/** Whether a word spells a location at all, whether or not one is there. */
+export const isPathShaped = (word: string): boolean =>
+  fileUrlPath(word) !== null || (!REMOTE_URL.test(word) && PATH_SHAPED.test(word));
+
+/**
+ * The directory a spelled-out location stands for, or null when the word spells none that
+ * exists. A path landing on a file means the directory holding it - "open this
+ * .../newsletter.html" asks for that folder, and cd can do nothing else with the file - so the
+ * one place a user pasted is reachable whether they copied the folder or something inside it.
+ */
+export const spelledDirectory = (word: string): string | null => {
+  const fileUrl = fileUrlPath(word);
+  if (fileUrl === null && (REMOTE_URL.test(word) || !PATH_SHAPED.test(word))) return null;
+  const path = absolutize(fileUrl ?? word);
+  if (isDirectory(path)) return path;
+  return isFile(path) ? dirname(path) : null;
+};
+
 /** Newline-delimited shell output cannot represent paths containing a line break. */
 export const isProtocolSafePath = (path: string): boolean => !/[\r\n]/u.test(path);
 

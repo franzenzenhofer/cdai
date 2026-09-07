@@ -66,6 +66,19 @@ describe('cdai in a real Bash', () => {
     expect(bare.stderr + spelled.stderr + quoted.stderr).not.toContain('cd:');
   });
 
+  it('cds to the directory of a file spelled out among the words', () => {
+    const squash = `${fixture.projects}/squash`;
+    const spelled = runBash(`cdai open this ${squash}/readme.md; pwd`);
+    expect(spelled.status).toBe(0);
+    expect(spelled.stdout.trim()).toBe(squash);
+    expect(spelled.stderr).not.toContain('cd:');
+    expect(runBash(`cdai ${squash}/readme.md; pwd`).stdout.trim()).toBe(squash);
+    expect(runBash(`cdai open this ${squash}; pwd`).stdout.trim()).toBe(squash);
+    const known = runBash('cdai ./dev/squa; pwd');
+    expect(known.stdout.trim()).toBe(squash);
+    expect(known.stderr).not.toContain('cd:');
+  });
+
   it('preserves explicit-path and invalid-option failures', () => {
     const path = runBash('cdai ./definitely-missing; printf "exit=%s\\n" "$?"');
     expect(path.stdout.trim()).toBe('exit=1');

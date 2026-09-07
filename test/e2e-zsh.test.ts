@@ -8,6 +8,7 @@ import packageJson from '../package.json' with { type: 'json' };
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');
 const ZSH = '/bin/zsh';
+const EXIT_OK = 0;
 const EXIT_NO_CD = 3;
 const EXIT_ERROR = 1;
 
@@ -163,6 +164,24 @@ describe('cdai in a real zsh', () => {
     const run = runZsh(withInit(`cdai file://${fixture.projects}/arcade; pwd`));
     expect(run.status).toBe(0);
     expect(run.stdout.trim()).toBe(`${fixture.projects}/arcade`);
+  });
+
+  it('cds to the directory of a file spelled out among the words', () => {
+    const squash = `${fixture.projects}/squash`;
+    const spelled = runZsh(withInit(`cdai open this ${squash}/readme.md; print "exit=$?"; pwd`));
+    expect(spelled.stdout.trim().split('\n')).toEqual([`exit=${EXIT_OK}`, squash]);
+    expect(spelled.stderr).not.toContain('cd:');
+    const lone = runZsh(withInit(`cdai ${squash}/readme.md; pwd`));
+    expect(lone.stdout.trim()).toBe(squash);
+    const folder = runZsh(withInit(`cdai open this ${squash}; pwd`));
+    expect(folder.stdout.trim()).toBe(squash);
+  });
+
+  it('resolves a path cd cannot take before reporting cd would have failed', () => {
+    const run = runZsh(withInit('cdai ./dev/squa; pwd'));
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe(`${fixture.projects}/squash`);
+    expect(run.stderr).not.toContain('cd:');
   });
 
   it('keeps explicit missing paths and invalid flags native-only', () => {
