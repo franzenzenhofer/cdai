@@ -1,5 +1,5 @@
 import { dataDir } from '../paths.js';
-import { CLI_CONTROL_WORDS } from './control.js';
+import { CLI_CONTROL_WORDS, URL_WORD_PATTERN } from './control.js';
 import { fishQuote } from './quote.js';
 import { fishSmartTab } from './fish-smart-tab.js';
 
@@ -46,8 +46,12 @@ const argumentParser = (): string => `function __cdai_parse
     return 0
 end`;
 
-const explicit = (): string => `function __cdai_explicit
+const explicit = (): string => `set -g _CDAI_URL '${URL_WORD_PATTERN}'
+function __cdai_explicit
     for arg in $_CDAI_QUERY
+        if string match -qr -- $_CDAI_URL "$arg"
+            continue
+        end
         if string match -qr '(^~|/)' -- "$arg"
             return 0
         end

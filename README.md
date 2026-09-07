@@ -101,6 +101,8 @@ $ cdai that client with the flowers
 | `cdai oldest petalworks` | open the oldest child directory |
 | `cdai petalworks 2025` | require `2025` somewhere in the matched path |
 | `cdai squash in dev` | restrict the search to the matching configured root |
+| `cdai https://tidewheel.orbit.dev` | jump to the project behind a pasted URL, subdomain first |
+| `cdai file:///Users/me/dev` | cd into a directory pasted as a `file://` URL |
 | `cdai -P petal` | resolve the match to its physical path, following symlinks |
 | `cdai ~/some/dir` | use native `cd`; explicit paths are never guessed |
 | `cdai -` | use native `cd -` to return to the previous directory |
@@ -238,7 +240,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.3.6 release suite covers 233 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.3.7 release suite covers 242 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
@@ -254,7 +256,7 @@ source tree.
         │                       │  stopwords: folder, dir, the, project, go, to, my,
         │                       │             of, a, an, for, from
         │                       │  hosts: literal first, then
-        │                       │         www.lumenlab.com/blog -> lumenlab
+        │                       │         tidewheel.orbit.dev -> tidewheel, orbit
         └───────────┬───────────┘
                     ▼
         ┌───────────────────────┐        ┌──────────────────┐
@@ -279,12 +281,15 @@ bonus for living under your current directory. All tokens must match (AND). A di
 own parent collapse into one answer, because they are the same place, not two options. Every
 threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
 
-**A host is read twice.** The word you typed always goes first, so a folder literally called
-`nordwind.at` or `amt.gv.at` still wins outright. Only when the literal word matches nothing does
-cdai read it as a host and search for the name it decorates: `lumenlab.com`, `www.lumenlab.com`
-and `https://www.lumenlab.com/blog` then all search for `lumenlab`, so `cdai lumenlab.com website`
-lands on `~/dev/lumenlab-website` without calling a model. The second reading needs a real public
-suffix, so `node.js` and `vite.config` are never anything but literal names.
+**A host is read again as its names.** The word you typed always goes first, so a folder
+literally called `nordwind.at` or `amt.gv.at` still wins outright. Only when the literal word
+matches nothing does cdai read it as a host and search for the names it decorates, most specific
+first: `lumenlab.com`, `www.lumenlab.com` and `https://www.lumenlab.com/blog` all search for
+`lumenlab`, so `cdai lumenlab.com website` lands on `~/dev/lumenlab-website` without calling a
+model, and `https://tidewheel.orbit.dev/level/7` searches for `tidewheel`, then for `orbit`. A URL
+is intent, never a path: pasting one, alone or inside a sentence, never reaches `cd`, which could
+only fail on it. The host reading needs a real public suffix, so `node.js` and `vite.config` are
+never anything but literal names.
 
 ## AI backends
 

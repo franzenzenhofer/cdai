@@ -7,7 +7,7 @@ import {
   type ScoreContext,
   type ScoredCandidate,
 } from './score.js';
-import { hostReduced, type ParsedQuery } from './tokenize.js';
+import { hostReadings, type ParsedQuery } from './tokenize.js';
 import type { DirIndex } from '../store/indexer.js';
 import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
@@ -141,10 +141,7 @@ export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
 };
 
 /** Every reading of the query, best understood first: what was typed, then hosts as names. */
-const readings = (query: ParsedQuery): ParsedQuery[] => {
-  const reduced = hostReduced(query);
-  return reduced === null ? [query] : [query, reduced];
-};
+const readings = (query: ParsedQuery): ParsedQuery[] => [query, ...hostReadings(query)];
 
 /** Best guesses for the AI tier when the strict matcher came back empty handed. */
 export const looseCandidates = (query: ParsedQuery, input: ResolveInput): ScoredCandidate[] => {
@@ -177,14 +174,17 @@ const resolveReading = (query: ParsedQuery, input: ResolveInput): Decision => {
 
 /**
  * A literal directory name always outranks a derived one. A folder can literally be called
- * "nordwind.at", so the typed word decides first and the host reading only speaks when
- * nothing answered at all.
+ * "nordwind.at", so the typed word decides first and the host readings only speak when nothing
+ * answered at all, the most specific label first.
  */
 export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision => {
   const literal = resolveReading(query, input);
   if (literal.kind !== 'unsure') return literal;
-  const reduced = hostReduced(query);
-  if (reduced === null) return literal;
-  const host = resolveReading(reduced, input);
-  return host.kind === 'unsure' && host.candidates.length === 0 ? literal : host;
+  let best = literal;
+  for (const reading of readings(query).slice(1)) {
+    const host = resolveReading(reading, input);
+    if (host.kind !== 'unsure') return host;
+    if (best.candidates.length === 0) best = host;
+  }
+  return best;
 };

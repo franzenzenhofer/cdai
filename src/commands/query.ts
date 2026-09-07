@@ -6,7 +6,14 @@ import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
 import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import { absolutize, contractTilde, isDirectory, isProtocolSafePath, isUnder } from '../paths.js';
+import {
+  absolutize,
+  contractTilde,
+  fileUrlPath,
+  isDirectory,
+  isProtocolSafePath,
+  isUnder,
+} from '../paths.js';
 import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
@@ -157,11 +164,17 @@ const searchInput = (args: readonly string[]): SearchInput | null => {
   return null;
 };
 
+/** The one thing a lone argument can name outright: an existing directory, spelled either way. */
+const namedDirectory = (args: readonly string[]): string | null => {
+  const first = args.length === 1 ? args[0] : undefined;
+  if (first === undefined) return null;
+  const path = absolutize(fileUrlPath(first) ?? first);
+  return isDirectory(path) ? path : null;
+};
+
 export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
-  const first = args[0];
-  if (args.length === 1 && first !== undefined && isDirectory(absolutize(first))) {
-    return jumpKnown(absolutize(first));
-  }
+  const named = namedDirectory(args);
+  if (named !== null) return jumpKnown(named);
   const search = searchInput(args);
   if (search === null) return EXIT.error;
   const { query, config } = search;

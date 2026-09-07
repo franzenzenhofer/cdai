@@ -238,6 +238,20 @@ describe('cli surface', () => {
     }
   });
 
+  it('resolves a pasted URL, and cds into a directory spelled as a file:// URL', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const project = join(fixture.projects, 'arcade', 'tidewheel');
+    expect(runCli('query', '--', 'https://tidewheel.orbit.dev/level/7').stdout.trim()).toBe(project);
+    expect(runCli('query', '--', 'the', 'https://tidewheel.orbit.dev/', 'arcade').stdout.trim())
+      .toBe(project);
+    expect(runCli('query', '--', `file://${project}`).stdout.trim()).toBe(project);
+    expect(runCli('query', '--', `file://localhost${project}`).stdout.trim()).toBe(project);
+    const encoded = `file://${join(fixture.projects, 'space%20dir%20with%20spaces')}`;
+    expect(runCli('query', '--', encoded).stdout.trim())
+      .toBe(join(fixture.projects, 'space dir with spaces'));
+  });
+
   it('keeps completion cached, rejects stale history, and invalidates changed config', () => {
     writeConfig(fixture);
     expect(runCli('index', '--refresh').status).toBe(0);

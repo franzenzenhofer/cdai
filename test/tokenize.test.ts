@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { hostLabel, hostReduced, isYear, tokenize, tokenizeArgs } from '../src/match/tokenize.js';
+import {
+  hostLabel,
+  hostLabels,
+  hostReadings,
+  isYear,
+  tokenize,
+  tokenizeArgs,
+} from '../src/match/tokenize.js';
 
 describe('tokenize', () => {
   it('drops stopwords and keeps the search terms', () => {
@@ -27,12 +34,23 @@ describe('tokenize', () => {
     expect(tokenize('lumenlab.com website').tokens).toEqual(['lumenlab.com', 'website']);
   });
 
-  it('offers the host reading as a second attempt, never as a replacement', () => {
-    expect(hostReduced(tokenize('lumenlab.com website'))?.tokens).toEqual(['lumenlab', 'website']);
-    expect(hostReduced(tokenize('the website of www.lumenlab.com'))?.tokens)
-      .toEqual(['website', 'lumenlab']);
-    expect(hostReduced(tokenize('petalworks 2025'))).toBeNull();
-    expect(hostReduced(tokenize('node.js'))).toBeNull();
+  it('reads a subdomain as its own name, and the domain as the next one', () => {
+    expect(hostLabels('tidewheel.orbit.dev')).toEqual(['tidewheel', 'orbit']);
+    expect(hostLabels('https://tidewheel.orbit.dev/level/7')).toEqual(['tidewheel', 'orbit']);
+    expect(hostLabels('www.lumenlab.com')).toEqual(['lumenlab']);
+    expect(hostLabels('amt.wien.gv.at')).toEqual(['amt', 'wien']);
+    expect(hostLabels('node.js')).toEqual([]);
+  });
+
+  it('offers the host readings as later attempts, never as a replacement', () => {
+    expect(hostReadings(tokenize('lumenlab.com website')).map((r) => r.tokens))
+      .toEqual([['lumenlab', 'website']]);
+    expect(hostReadings(tokenize('the website of www.lumenlab.com')).map((r) => r.tokens))
+      .toEqual([['website', 'lumenlab']]);
+    expect(hostReadings(tokenize('https://tidewheel.orbit.dev/ game')).map((r) => r.tokens))
+      .toEqual([['tidewheel', 'game'], ['orbit', 'game']]);
+    expect(hostReadings(tokenize('petalworks 2025'))).toEqual([]);
+    expect(hostReadings(tokenize('node.js'))).toEqual([]);
   });
 
   it('preserves stopwords when they are the only possible directory name', () => {

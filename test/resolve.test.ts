@@ -63,6 +63,24 @@ describe('resolveQuery', () => {
     expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.clients}/orbit-website`);
   });
 
+  it('reads a pasted URL as the project behind it, subdomain first', () => {
+    const decision = run('https://tidewheel.orbit.dev/level/7');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.projects}/arcade/tidewheel`);
+  });
+
+  it('falls back to the domain when the subdomain names nothing', () => {
+    const decision = run('https://www.orbit.dev/');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.clients}/orbit`);
+  });
+
+  it('reads a URL that is only part of the request', () => {
+    const decision = run('the https://tidewheel.orbit.dev/ arcade');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.projects}/arcade/tidewheel`);
+  });
+
   it('offers a picker when two different places match', () => {
     const decision = run('tabletop');
     expect(decision.kind).toBe('choose');

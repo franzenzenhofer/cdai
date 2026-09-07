@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resolveExecutable } from '../src/executable.js';
@@ -51,7 +51,9 @@ describe.skipIf(FISH === null)('cdai in a real fish', () => {
   });
 
   it('preserves cd history, cd -, and CDPATH through the fish wrapper', () => {
-    const history = runFish(`cdai petal; contains -- ${fixture.rootDir} $dirprev; echo history=$status`);
+    // fish resolves the startup directory, and macOS puts the fixture behind /var -> /private/var.
+    const start = realpathSync(fixture.rootDir);
+    const history = runFish(`cdai petal; contains -- ${start} $dirprev; echo history=$status`);
     expect(history.stdout).toContain('history=0');
     const previous = runFish(`cd ${fixture.projects}/squash; cd /tmp; cdai -; pwd`);
     expect(previous.stdout.trim()).toBe(`${fixture.projects}/squash`);
@@ -65,10 +67,25 @@ describe.skipIf(FISH === null)('cdai in a real fish', () => {
       + `${fixture.rootDir}; cdai $flag petal; or exit; pwd; end; else; echo unsupported; end`,
     );
     const output = run.stdout.trim().split('\n');
+    const logical = `${fixture.clients}/petalworks`;
+    // -P and --dereference ask for the physical path, and it differs from the logical one on macOS.
+    const physical = realpathSync(logical);
     expect(
       (output.length === 1 && output[0] === 'unsupported')
-      || (output.length === 4 && output.every((path) => path === `${fixture.clients}/petalworks`)),
+      || (output.length === 4
+        && output.every((path, index) => path === (index < 2 ? physical : logical))),
     ).toBe(true);
+  });
+
+  it('takes a pasted URL as intent, in every spelling', () => {
+    const target = `${fixture.projects}/arcade/tidewheel`;
+    const bare = runFish('cdai https://tidewheel.orbit.dev/level/7; pwd');
+    expect(bare.status).toBe(0);
+    expect(bare.stdout.trim()).toBe(target);
+    const spelled = runFish('cdai the https://tidewheel.orbit.dev/ arcade; pwd');
+    expect(spelled.stdout.trim()).toBe(target);
+    const quoted = runFish('cdai "the https://tidewheel.orbit.dev/ arcade"; pwd');
+    expect(quoted.stdout.trim()).toBe(target);
   });
 
   it('keeps explicit missing paths native-only', () => {

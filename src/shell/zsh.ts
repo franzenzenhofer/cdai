@@ -1,5 +1,10 @@
 import { dataDir } from '../paths.js';
-import { CLI_CONTROL_PATTERN, CLI_CONTROL_WORDS, ZSH_CD_FLAG_CHARS } from './control.js';
+import {
+  CLI_CONTROL_PATTERN,
+  CLI_CONTROL_WORDS,
+  URL_WORD_PATTERN,
+  ZSH_CD_FLAG_CHARS,
+} from './control.js';
 import { shellQuote } from './quote.js';
 
 const recorder = (): string => `__cdai_record() {
@@ -34,9 +39,11 @@ const parser = (): string => `__cdai_parse() {
   done
 }`;
 
-const explicit = (): string => `__cdai_explicit() {
+const explicit = (): string => `typeset -g _CDAI_URL='${URL_WORD_PATTERN}'
+__cdai_explicit() {
   local arg
   for arg in "\${_CDAI_QUERY[@]}"; do
+    [[ "$arg" =~ $_CDAI_URL ]] && continue
     [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
   done
   return 1

@@ -30,6 +30,9 @@ export const PROJECT_DIRS = [
   'almanac',
   'nordwind',
   'goalmap',
+  // A project of its own, published under a subdomain of another project's domain.
+  'arcade',
+  'arcade/tidewheel',
   'spring',
   'string',
   '.hidden-thing',

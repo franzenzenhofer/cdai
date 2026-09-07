@@ -54,6 +54,18 @@ describe('cdai in a real Bash', () => {
     expect(physical.stdout.trim()).toBe(realpathSync(`${fixture.clients}/petalworks`));
   });
 
+  it('takes a pasted URL as intent, in every spelling', () => {
+    const target = `${fixture.projects}/arcade/tidewheel`;
+    const bare = runBash('cdai https://tidewheel.orbit.dev/level/7; pwd');
+    expect(bare.status).toBe(0);
+    expect(bare.stdout.trim()).toBe(target);
+    const spelled = runBash('cdai the https://tidewheel.orbit.dev/ arcade; pwd');
+    expect(spelled.stdout.trim()).toBe(target);
+    const quoted = runBash('cdai "the https://tidewheel.orbit.dev/ arcade"; pwd');
+    expect(quoted.stdout.trim()).toBe(target);
+    expect(bare.stderr + spelled.stderr + quoted.stderr).not.toContain('cd:');
+  });
+
   it('preserves explicit-path and invalid-option failures', () => {
     const path = runBash('cdai ./definitely-missing; printf "exit=%s\\n" "$?"');
     expect(path.stdout.trim()).toBe('exit=1');

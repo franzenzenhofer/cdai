@@ -3,6 +3,7 @@ import {
   BASH_PORTABLE_CD_FLAG_CHARS,
   CLI_CONTROL_PATTERN,
   CLI_CONTROL_WORDS,
+  URL_WORD_PATTERN,
 } from './control.js';
 import { shellQuote } from './quote.js';
 
@@ -72,9 +73,11 @@ const parser = (): string => `__cdai_parse() {
   done
 }`;
 
-const explicit = (): string => `__cdai_explicit() {
+const explicit = (): string => `_CDAI_URL='${URL_WORD_PATTERN}'
+__cdai_explicit() {
   local arg
   for arg in "\${_CDAI_QUERY[@]}"; do
+    [[ "$arg" =~ $_CDAI_URL ]] && continue
     [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
   done
   return 1

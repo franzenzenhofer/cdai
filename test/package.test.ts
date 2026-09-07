@@ -6,6 +6,18 @@ import { makeFixture, type Fixture } from './fixtures.js';
 import packageJson from '../package.json' with { type: 'json' };
 
 const REPO = process.cwd();
+
+/** npm 11 reports the packed tarballs as an array, npm 12 as an object keyed by package name. */
+const packedFilename = (stdout: string): string => {
+  const parsed = JSON.parse(stdout) as unknown;
+  const packed = (Array.isArray(parsed) ? parsed : Object.values(parsed as object)) as unknown[];
+  const first = packed[0];
+  const filename = typeof first === 'object' && first !== null && 'filename' in first
+    ? (first as { filename: unknown }).filename
+    : undefined;
+  expect(typeof filename).toBe('string');
+  return filename as string;
+};
 let fixture: Fixture;
 let archive = '';
 let installedBin = '';
@@ -19,8 +31,7 @@ beforeAll(() => {
     encoding: 'utf8',
   });
   expect(packed.status).toBe(0);
-  const result = JSON.parse(packed.stdout) as Array<{ filename: string }>;
-  archive = join(fixture.rootDir, result[0]?.filename ?? 'missing.tgz');
+  archive = join(fixture.rootDir, packedFilename(packed.stdout));
   const prefix = join(fixture.rootDir, 'installed');
   mkdirSync(prefix);
   const installed = spawnSync(

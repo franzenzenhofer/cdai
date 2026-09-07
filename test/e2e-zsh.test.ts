@@ -147,6 +147,24 @@ describe('cdai in a real zsh', () => {
     expect(logical.stdout.trim().endsWith('/clients/petalworks')).toBe(true);
   });
 
+  it('takes a pasted URL as intent, in every spelling', () => {
+    const target = `${fixture.projects}/arcade/tidewheel`;
+    const bare = runZsh(withInit('cdai https://tidewheel.orbit.dev/level/7; pwd'));
+    expect(bare.status).toBe(0);
+    expect(bare.stdout.trim()).toBe(target);
+    const spelled = runZsh(withInit('cdai the https://tidewheel.orbit.dev/ arcade; pwd'));
+    expect(spelled.stdout.trim()).toBe(target);
+    const quoted = runZsh(withInit('cdai "the https://tidewheel.orbit.dev/ arcade"; pwd'));
+    expect(quoted.stdout.trim()).toBe(target);
+    expect(bare.stderr + spelled.stderr + quoted.stderr).not.toContain('cd:');
+  });
+
+  it('cds into a directory spelled as a file:// URL', () => {
+    const run = runZsh(withInit(`cdai file://${fixture.projects}/arcade; pwd`));
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe(`${fixture.projects}/arcade`);
+  });
+
   it('keeps explicit missing paths and invalid flags native-only', () => {
     const path = runZsh(withInit('cdai ./definitely-missing; print "exit=$?"'));
     expect(path.stdout.trim()).toBe(`exit=${EXIT_ERROR}`);

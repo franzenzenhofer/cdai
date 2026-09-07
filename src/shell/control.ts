@@ -17,6 +17,13 @@ export const CLI_CONTROLS = [
 export const CLI_CONTROL_PATTERN = CLI_CONTROLS.join('|');
 export const CLI_CONTROL_WORDS = CLI_CONTROLS.join(' ');
 
+/**
+ * A word carrying a URL scheme is intent, never a filesystem path: pasting
+ * "https://tidewheel.orbit.dev" asks for the project behind the site, and `cd` can only fail on
+ * it. POSIX ERE and PCRE read this the same way, so all three shells share the one rule.
+ */
+export const URL_WORD_PATTERN = '(^|[[:space:]])[a-zA-Z][a-zA-Z0-9+.-]*://';
+
 export const ZSH_CD_FLAG_CHARS = 'qLsP';
 export const BASH_CD_FLAG_CHARS = 'LPe@';
 export const BASH_PORTABLE_CD_FLAG_CHARS = 'LP';

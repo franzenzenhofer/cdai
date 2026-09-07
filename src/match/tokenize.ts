@@ -35,8 +35,10 @@ const TLDS = new Set([
 /** Labels that decorate a host without naming it, in either the sub- or the second level. */
 const HOST_NOISE = new Set([
   'www', 'm', 'web', 'shop', 'blog', 'app', 'api', 'dev', 'staging', 'test', 'mail',
-  'co', 'com', 'net', 'org', 'gov', 'edu', 'ac',
+  'co', 'com', 'net', 'org', 'gov', 'gv', 'edu', 'ac',
 ]);
+/** A host has at most this many readings, so a long host cannot fan the resolver out. */
+const MAX_HOST_READINGS = 3;
 
 export const isYear = (token: string): boolean => {
   if (!YEAR_PATTERN.test(token)) return false;
@@ -45,19 +47,23 @@ export const isYear = (token: string): boolean => {
 };
 
 /**
- * A host is a name plus decoration: scheme, subdomain, TLD, path. A directory may be named
- * after the name ("lumenlab-website") instead of the host, so "www.lumenlab.com/blog" also
- * searches for "lumenlab". Reduced only when a recognisable host survives; "vite.config" stays
- * intact. This is an alternative reading, never a replacement - see `hostReduced`.
+ * The labels of a host that can name a directory, most specific first. A host is a name plus
+ * decoration: scheme, TLD, path, and labels like "www" or "shop" that describe a site rather
+ * than name it. What is left can still be two names - "tidewheel.orbit.dev" is the project
+ * "tidewheel" hosted under "orbit" - and a folder is routinely called either, so both readings
+ * survive, the leftmost one first. Empty when no recognisable host is there at all, so
+ * "node.js" and "vite.config" stay literal directory names.
  */
-export const hostLabel = (word: string): string => {
+export const hostLabels = (word: string): string[] => {
   const bare = word.replace(/^[a-z]+:\/\//u, '').replace(/[.,;:!?]+$/u, '');
-  if (!HOST_PATTERN.test(bare)) return word;
+  if (!HOST_PATTERN.test(bare)) return [];
   const labels = bare.split('/')[0]?.split('.') ?? [];
-  if (!TLDS.has(labels.at(-1) ?? '')) return word;
-  const named = labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
-  return named.at(-1) ?? word;
+  if (!TLDS.has(labels.at(-1) ?? '')) return [];
+  return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
 };
+
+/** The one label that names the host best, or the word itself when it is not a host. */
+export const hostLabel = (word: string): string => hostLabels(word)[0] ?? word;
 
 export const splitWords = (input: string): string[] =>
   input
@@ -66,15 +72,25 @@ export const splitWords = (input: string): string[] =>
     .filter((word) => word !== '');
 
 /**
- * The same query read as host names instead of literal words, or null when no word is a host.
- * Client folders are routinely named after the site itself, decoration and all - "nordwind.at",
- * "amt.gv.at" - so the word the user typed always gets the first attempt; this reading is only
- * tried when that finds nothing.
+ * The same query read as host names instead of literal words, best reading first, empty when no
+ * word is a host. Client folders are routinely named after the site itself, decoration and all -
+ * "nordwind.at", "amt.gv.at" - so the word the user typed always gets the first attempt; these
+ * readings are only tried when that finds nothing.
  */
-export const hostReduced = (query: ParsedQuery): ParsedQuery | null => {
-  const tokens = query.tokens.map(hostLabel);
-  if (tokens.every((token, index) => token === query.tokens[index])) return null;
-  return { ...query, tokens };
+export const hostReadings = (query: ParsedQuery): ParsedQuery[] => {
+  const labels = query.tokens.map(hostLabels);
+  const depth = Math.min(MAX_HOST_READINGS, Math.max(0, ...labels.map((list) => list.length)));
+  const readings: ParsedQuery[] = [];
+  for (let level = 0; level < depth; level += 1) {
+    const tokens = query.tokens.map((token, index) => {
+      const list = labels[index] ?? [];
+      return list[Math.min(level, list.length - 1)] ?? token;
+    });
+    const known = [query, ...readings];
+    if (known.some((seen) => seen.tokens.every((token, index) => token === tokens[index]))) continue;
+    readings.push({ ...query, tokens });
+  }
+  return readings;
 };
 
 interface OperatorScan {

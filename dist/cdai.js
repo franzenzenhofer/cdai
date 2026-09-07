@@ -39,6 +39,16 @@ var contractTilde = (input) => {
   if (input.startsWith(home + sep)) return `~${sep}${input.slice(home.length + 1)}`;
   return input;
 };
+var fileUrlPath = (input) => {
+  if (!/^file:\/\//iu.test(input)) return null;
+  try {
+    const url = new URL(input);
+    if (url.hostname !== "" && url.hostname !== "localhost") return null;
+    return decodeURIComponent(url.pathname);
+  } catch {
+    return null;
+  }
+};
 var absolutize = (input) => {
   const expanded = expandTilde(input);
   return isAbsolute(expanded) ? resolve(expanded) : resolve(process.cwd(), expanded);
@@ -1396,27 +1406,38 @@ var HOST_NOISE = /* @__PURE__ */ new Set([
   "net",
   "org",
   "gov",
+  "gv",
   "edu",
   "ac"
 ]);
+var MAX_HOST_READINGS = 3;
 var isYear = (token) => {
   if (!YEAR_PATTERN.test(token)) return false;
   const value = Number.parseInt(token, 10);
   return value >= YEAR_MIN && value <= YEAR_MAX;
 };
-var hostLabel = (word) => {
+var hostLabels = (word) => {
   const bare = word.replace(/^[a-z]+:\/\//u, "").replace(/[.,;:!?]+$/u, "");
-  if (!HOST_PATTERN.test(bare)) return word;
+  if (!HOST_PATTERN.test(bare)) return [];
   const labels = bare.split("/")[0]?.split(".") ?? [];
-  if (!TLDS.has(labels.at(-1) ?? "")) return word;
-  const named = labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
-  return named.at(-1) ?? word;
+  if (!TLDS.has(labels.at(-1) ?? "")) return [];
+  return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
 };
 var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
-var hostReduced = (query) => {
-  const tokens = query.tokens.map(hostLabel);
-  if (tokens.every((token, index) => token === query.tokens[index])) return null;
-  return { ...query, tokens };
+var hostReadings = (query) => {
+  const labels = query.tokens.map(hostLabels);
+  const depth = Math.min(MAX_HOST_READINGS, Math.max(0, ...labels.map((list) => list.length)));
+  const readings2 = [];
+  for (let level = 0; level < depth; level += 1) {
+    const tokens = query.tokens.map((token, index) => {
+      const list = labels[index] ?? [];
+      return list[Math.min(level, list.length - 1)] ?? token;
+    });
+    const known = [query, ...readings2];
+    if (known.some((seen) => seen.tokens.every((token, index) => token === tokens[index]))) continue;
+    readings2.push({ ...query, tokens });
+  }
+  return readings2;
 };
 var takeRootFilter = (words) => {
   const rest = [];
@@ -1571,10 +1592,7 @@ var decide = (ranked) => {
   }
   return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
-var readings = (query) => {
-  const reduced = hostReduced(query);
-  return reduced === null ? [query] : [query, reduced];
-};
+var readings = (query) => [query, ...hostReadings(query)];
 var looseCandidates = (query, input) => {
   const queries = readings(query);
   return buildCandidates(input).map((candidate) => ({
@@ -1598,10 +1616,13 @@ var resolveReading = (query, input) => {
 var resolveQuery = (query, input) => {
   const literal = resolveReading(query, input);
   if (literal.kind !== "unsure") return literal;
-  const reduced = hostReduced(query);
-  if (reduced === null) return literal;
-  const host = resolveReading(reduced, input);
-  return host.kind === "unsure" && host.candidates.length === 0 ? literal : host;
+  let best = literal;
+  for (const reading of readings(query).slice(1)) {
+    const host = resolveReading(reading, input);
+    if (host.kind !== "unsure") return host;
+    if (best.candidates.length === 0) best = host;
+  }
+  return best;
 };
 
 // src/match/completion.ts
@@ -1638,6 +1659,7 @@ var CLI_CONTROLS = [
 ];
 var CLI_CONTROL_PATTERN = CLI_CONTROLS.join("|");
 var CLI_CONTROL_WORDS = CLI_CONTROLS.join(" ");
+var URL_WORD_PATTERN = "(^|[[:space:]])[a-zA-Z][a-zA-Z0-9+.-]*://";
 var ZSH_CD_FLAG_CHARS = "qLsP";
 var BASH_CD_FLAG_CHARS = "LPe@";
 var BASH_PORTABLE_CD_FLAG_CHARS = "LP";
@@ -2191,11 +2213,15 @@ var searchInput = (args) => {
   fail("no roots configured", "run `cdai setup` once to pick the directories to learn");
   return null;
 };
+var namedDirectory = (args) => {
+  const first = args.length === 1 ? args[0] : void 0;
+  if (first === void 0) return null;
+  const path = absolutize(fileUrlPath(first) ?? first);
+  return isDirectory(path) ? path : null;
+};
 var runQuery = async (args) => {
-  const first = args[0];
-  if (args.length === 1 && first !== void 0 && isDirectory(absolutize(first))) {
-    return jumpKnown(absolutize(first));
-  }
+  const named = namedDirectory(args);
+  if (named !== null) return jumpKnown(named);
   const search = searchInput(args);
   if (search === null) return EXIT.error;
   const { query, config } = search;
@@ -2539,9 +2565,11 @@ var parser = () => `__cdai_parse() {
     fi
   done
 }`;
-var explicit = () => `__cdai_explicit() {
+var explicit = () => `_CDAI_URL='${URL_WORD_PATTERN}'
+__cdai_explicit() {
   local arg
   for arg in "\${_CDAI_QUERY[@]}"; do
+    [[ "$arg" =~ $_CDAI_URL ]] && continue
     [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
   done
   return 1
@@ -2740,8 +2768,12 @@ var argumentParser = () => `function __cdai_parse
     end
     return 0
 end`;
-var explicit2 = () => `function __cdai_explicit
+var explicit2 = () => `set -g _CDAI_URL '${URL_WORD_PATTERN}'
+function __cdai_explicit
     for arg in $_CDAI_QUERY
+        if string match -qr -- $_CDAI_URL "$arg"
+            continue
+        end
         if string match -qr '(^~|/)' -- "$arg"
             return 0
         end
@@ -2916,9 +2948,11 @@ var parser3 = () => `__cdai_parse() {
     fi
   done
 }`;
-var explicit3 = () => `__cdai_explicit() {
+var explicit3 = () => `typeset -g _CDAI_URL='${URL_WORD_PATTERN}'
+__cdai_explicit() {
   local arg
   for arg in "\${_CDAI_QUERY[@]}"; do
+    [[ "$arg" =~ $_CDAI_URL ]] && continue
     [[ "$arg" == */* || "$arg" == '~'* ]] && return 0
   done
   return 1
@@ -3010,7 +3044,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.6",
+  version: "0.3.7",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

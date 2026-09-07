@@ -43,6 +43,21 @@ export const contractTilde = (input: string): string => {
   return input;
 };
 
+/**
+ * The path inside a "file://" URL, or null when the word is not one. A directory copied out of
+ * a file manager or a browser arrives spelled as a URL, and it still names one exact place.
+ */
+export const fileUrlPath = (input: string): string | null => {
+  if (!/^file:\/\//iu.test(input)) return null;
+  try {
+    const url = new URL(input);
+    if (url.hostname !== '' && url.hostname !== 'localhost') return null;
+    return decodeURIComponent(url.pathname);
+  } catch {
+    return null;
+  }
+};
+
 export const absolutize = (input: string): string => {
   const expanded = expandTilde(input);
   return isAbsolute(expanded) ? resolve(expanded) : resolve(process.cwd(), expanded);
