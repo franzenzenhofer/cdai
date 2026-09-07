@@ -45,6 +45,8 @@ export const runIndex = (args: readonly string[]): ExitCode => {
   const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
   const partial = index.truncated === null ? '' : ` (partial: ${index.truncated} limit)`;
   note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${stale ? ' (stale)' : ''}${partial}`);
+  // Age is not a chore: a query that finds nothing rebuilds this before it gives up.
+  if (stale) note('      rebuilt on its own the next time nothing answers');
   for (const root of config.roots) {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);

@@ -1216,6 +1216,7 @@ var runDoctor = (args = []) => {
   const partial = index.truncated === null ? "" : ` (partial: ${index.truncated} limit)`;
   note(`index  ${mark(existsSync9(indexFile()) && compatible)} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? " (stale)" : ""}${partial}`);
   if (!compatible) note("       run `cdai index --refresh` to rebuild the cache");
+  else if (stale) note("       rebuilt on its own the next time nothing answers");
   note(`db     ${mark(existsSync9(dbFile()))} ${loadDb().records.length} remembered paths`);
   note(`alias  ${mark(existsSync9(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
   note(`visits ${mark(existsSync9(visitsLog()))} ${visitsLog()}`);
@@ -2012,6 +2013,7 @@ var runIndex = (args) => {
   const stale = isStale(index, Date.now()) || !matchesConfig(index, config);
   const partial = index.truncated === null ? "" : ` (partial: ${index.truncated} limit)`;
   note(`cdai: ${index.entries.length} directories, ${ageMinutes}min old${stale ? " (stale)" : ""}${partial}`);
+  if (stale) note("      rebuilt on its own the next time nothing answers");
   for (const root of config.roots) {
     const count = index.entries.filter((entry) => entry.root === root.path).length;
     note(`      ${contractTilde(root.path)} depth ${root.depth}: ${count}`);
@@ -2302,7 +2304,7 @@ var jumpKnown = (path) => {
 };
 var jumpExisting = (path) => {
   if (!isDirectory(path)) {
-    fail("matched directory no longer exists", "run `cdai index --refresh`");
+    fail(`${contractTilde(path)} stopped being a directory during this lookup`);
     return EXIT.error;
   }
   return jumpKnown(path);
@@ -3206,7 +3208,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.13",
+  version: "0.3.14",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

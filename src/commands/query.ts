@@ -61,9 +61,14 @@ const jumpKnown = (path: string): ExitCode => {
   return EXIT.ok;
 };
 
+/**
+ * Reached only with a freshly scanned index behind it, so the match was a directory moments ago
+ * and is not one now. Rebuilding the cache is exactly what already happened, so the honest report
+ * is that it went away under us - a rename, a delete, or a symlink that stopped pointing anywhere.
+ */
 const jumpExisting = (path: string): ExitCode => {
   if (!isDirectory(path)) {
-    fail('matched directory no longer exists', 'run `cdai index --refresh`');
+    fail(`${contractTilde(path)} stopped being a directory during this lookup`);
     return EXIT.error;
   }
   return jumpKnown(path);

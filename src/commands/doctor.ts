@@ -67,6 +67,7 @@ export const runDoctor = (args: readonly string[] = []): ExitCode => {
   const partial = index.truncated === null ? '' : ` (partial: ${index.truncated} limit)`;
   note(`index  ${mark(existsSync(indexFile()) && compatible)} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? ' (stale)' : ''}${partial}`);
   if (!compatible) note('       run `cdai index --refresh` to rebuild the cache');
+  else if (stale) note('       rebuilt on its own the next time nothing answers');
   note(`db     ${mark(existsSync(dbFile()))} ${loadDb().records.length} remembered paths`);
   note(`alias  ${mark(existsSync(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
   note(`visits ${mark(existsSync(visitsLog()))} ${visitsLog()}`);

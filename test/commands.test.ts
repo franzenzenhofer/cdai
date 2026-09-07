@@ -370,6 +370,18 @@ describe('cli surface', () => {
     expect(miss.stderr).toContain('freshly scanned');
     expect(miss.stderr).toContain('cdai setup --root');
     expect(miss.stderr).not.toContain('index --refresh');
+    // An age report is not a chore either, as long as the cache still answers the same question.
+    const aged = JSON.parse(readFileSync(join(fixture.dataDir, 'index.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(
+      join(fixture.dataDir, 'index.json'),
+      JSON.stringify({ ...aged, generatedAt: Date.now() - 2 * 60 * 60 * 1000 }),
+    );
+    for (const command of ['index', 'doctor']) {
+      const report = runCli(command);
+      expect(report.stderr).toContain('(stale)');
+      expect(report.stderr).toContain('rebuilt on its own');
+      expect(report.stderr).not.toContain('run `cdai index --refresh`');
+    }
   });
 
   it('emits Bash and fish completion hooks', () => {
