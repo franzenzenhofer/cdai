@@ -240,7 +240,8 @@ That makes the failure mode boring on purpose. Two measured runs of the same que
 # frecency db empty, no fuzzy candidates -> nothing to choose from
 $ cdai that client with the flowers
 cdai: no match for "that client with the flowers"
-      try `cdai index --refresh`, or add a root with `cdai setup`
+      searched 2540 directories under 2 roots, freshly scanned
+      not there? `cdai setup --root <path>`, or reach deeper with `--depth <n>`
 
 # same query, after petalworks is in the history
 $ cdai that client with the flowers
@@ -295,7 +296,7 @@ source tree.
         └───────────┬───────────┘
                     ▼
         ┌───────────────────────┐        ┌──────────────────┐
-        │ tier 1: deterministic │◀───────│ index.json  dirs │  config-aware, TTL 60min
+        │ tier 1: deterministic │◀───────│ index.json  dirs │  config-aware, rescanned on a miss
         │ fuzzy + frecency      │◀───────│ db + aliases     │  visits + confirmed intent
         └───────────┬───────────┘        └──────────────────┘
                     │
@@ -315,6 +316,23 @@ word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecenc
 bonus for living under your current directory. All tokens must match (AND). A directory and its
 own parent collapse into one answer, because they are the same place, not two options. Every
 threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
+
+**A rescan is never a question.** Rebuilding the whole index costs about 130ms for 2,500
+directories - a fraction of the AI call it precedes - so cdai decides instead of asking, and the
+moment is always the same: the one where new data could still change the answer.
+
+| moment | rescan | why |
+|---|---|---|
+| config changed | yes | the index answers a different question now |
+| a deterministic hit, or a picker | no | there is nothing to gain |
+| a confident hit on a path that vanished | yes | the index is wrong, not incomplete |
+| **nothing answered, after alias recall** | **yes, once** | a folder made since the last scan is invisible however recent that scan was |
+| the AI tier | never separately | it runs on the index the rescan just built, so it can name a folder made a second ago |
+| Tab completion | never | keystroke latency; Tab reads cached state only |
+
+That leaves exactly one thing a rescan cannot fix, and it is what the miss reports: a folder
+outside your roots or below your depth. `cdai setup --root <path>` and `--depth <n>` are the only
+levers left, so those are the words on the screen - never "try reindexing", which just happened.
 
 **A URL is read again as the names it carries.** The word you typed always goes first, so a
 folder literally called `nordwind.at` or `amt.gv.at` still wins outright. Only when the literal
@@ -430,9 +448,9 @@ short atomic updates so visits and aliases are not lost or double-counted.
 ## Limitations
 
 - **No Windows.** zsh, bash and fish on macOS and Linux.
-- **The index is a snapshot**, rebuilt when configuration changes, an old uncertain query needs
-  it, or a confident cached target vanished. A brand-new folder during the 60-minute TTL may
-  still need `cdai index --refresh`.
+- **The index is a snapshot**, but never a stale answer: it is rebuilt whenever nothing answered,
+  so a folder made seconds ago is found without being told to reindex. What a rescan cannot fix is
+  a folder outside your roots or below your depth, and the miss says so.
 - **Crawl depth is bounded** by your config (and capped at 64). Deep monorepos need a deeper
   root, and a deeper root means a bigger index.
 - **Tier 2 is seconds, not milliseconds**, and needs a working CLI backend. It is off the hot

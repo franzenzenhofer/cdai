@@ -2278,16 +2278,18 @@ var nativeCdWords = (args) => args.length <= CD_MAX_NATIVE_ARGS && args.some(isP
 
 // src/commands/query.ts
 var MILLIS_PER_SECOND4 = 1e3;
-var suggest = (ranked, raw, native) => {
-  if (native) return EXIT.native;
-  fail(`no match for "${raw}"`);
+var suggest = (ranked, context) => {
+  if (context.native) return EXIT.native;
+  fail(`no match for "${context.query.raw}"`);
   const guesses = ranked.slice(0, LIMIT.suggestions);
-  if (guesses.length === 0) {
-    note("      try `cdai index --refresh`, or add a root with `cdai setup`");
-    return EXIT.error;
+  if (guesses.length > 0) {
+    note("      closest:");
+    guesses.forEach((g) => note(`        ${contractTilde(g.candidate.path)}`));
   }
-  note("      closest:");
-  guesses.forEach((g) => note(`        ${contractTilde(g.candidate.path)}`));
+  const roots = context.config.roots.length;
+  const scanned = context.input.index.entries.length;
+  note(`      searched ${scanned} directories under ${roots} ${roots === 1 ? "root" : "roots"}, freshly scanned`);
+  note("      not there? `cdai setup --root <path>`, or reach deeper with `--depth <n>`");
   return EXIT.error;
 };
 var jumpKnown = (path) => {
@@ -2333,7 +2335,7 @@ var declineHeadlessAi = () => {
 var aiTier = async (strict, context) => {
   const { ai } = context.config;
   const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
-  if (!ai.enabled) return suggest(ranked, context.query.raw, context.native);
+  if (!ai.enabled) return suggest(ranked, context);
   if (!hasTty()) return context.native ? EXIT.native : declineHeadlessAi();
   const request = buildAiRequest({
     query: context.query.raw,
@@ -2343,18 +2345,18 @@ var aiTier = async (strict, context) => {
     nowSeconds: context.nowSeconds,
     roots: context.config.roots.map((root) => root.path)
   });
-  if (request.candidates.length === 0) return suggest(ranked, context.query.raw, context.native);
+  if (request.candidates.length === 0) return suggest(ranked, context);
   const backend2 = resolveAiBackend(ai);
   if (backend2 === null) {
     const label = ai.command === "auto" ? "no supported AI backend found" : `${ai.command} unavailable`;
     note(`cdai: ${label}, staying deterministic`);
-    return suggest(ranked, context.query.raw, context.native);
+    return suggest(ranked, context);
   }
   note(`cdai: thinking... (${backendLabel(backend2)})`);
   const outcome = await askAi(request, backend2, ai.timeoutMs);
   if (outcome.kind === "none") {
     note(`cdai: ai had no usable answer (${outcome.why})`);
-    return suggest(ranked, context.query.raw, context.native);
+    return suggest(ranked, context);
   }
   return acceptAi(outcome, context);
 };
@@ -2409,7 +2411,7 @@ var runQuery = async (args) => {
     const recalled = recalledAlias({ query, config, db, nowSeconds, input, native });
     if (recalled !== null) return recalled;
   }
-  if (!refreshed && decision.kind === "unsure" && isStale(input.index, Date.now())) {
+  if (!refreshed && decision.kind === "unsure") {
     input = { ...input, index: refreshIndex(config) };
     refreshed = true;
     decision = resolveQuery(query, input);
@@ -3204,7 +3206,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.12",
+  version: "0.3.13",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

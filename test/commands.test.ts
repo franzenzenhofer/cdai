@@ -334,7 +334,7 @@ describe('cli surface', () => {
     expect(runCli('complete', '--', 'srr').stdout).toBe('');
   });
 
-  it('accepts a valid empty index without recrawling every query', () => {
+  it('accepts a valid empty index, and recrawls only when nothing answered', () => {
     writeFileSync(
       join(fixture.configDir, 'config.json'),
       JSON.stringify({
@@ -344,9 +344,32 @@ describe('cli surface', () => {
       }),
     );
     expect(runCli('index', '--refresh').status).toBe(0);
-    const before = readFileSync(join(fixture.dataDir, 'index.json'), 'utf8');
+    const empty = readFileSync(join(fixture.dataDir, 'index.json'), 'utf8');
+    // An empty index is valid, not broken: a miss buys exactly one rescan, never a rebuild loop.
     expect(runCli('query', '--', 'missing').status).toBe(1);
-    expect(readFileSync(join(fixture.dataDir, 'index.json'), 'utf8')).toBe(before);
+    const rescanned = readFileSync(join(fixture.dataDir, 'index.json'), 'utf8');
+    expect(rescanned).not.toBe(empty);
+    // A query that is answered never touches the disk.
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const filled = readFileSync(join(fixture.dataDir, 'index.json'), 'utf8');
+    expect(runCli('query', '--', 'petal').status).toBe(0);
+    expect(readFileSync(join(fixture.dataDir, 'index.json'), 'utf8')).toBe(filled);
+  });
+
+  it('finds a directory made since the last scan, without being told to reindex', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    mkdirSync(join(fixture.projects, 'quicksilver-launch'));
+    const found = runCli('query', '--', 'quicksilver');
+    expect(found.status).toBe(0);
+    expect(found.stdout.trim()).toBe(join(fixture.projects, 'quicksilver-launch'));
+    // Having just scanned, the miss report names the only lever a rescan cannot pull.
+    const miss = runCli('query', '--', 'zzz-nothing-like-this');
+    expect(miss.status).toBe(1);
+    expect(miss.stderr).toContain('freshly scanned');
+    expect(miss.stderr).toContain('cdai setup --root');
+    expect(miss.stderr).not.toContain('index --refresh');
   });
 
   it('emits Bash and fish completion hooks', () => {
