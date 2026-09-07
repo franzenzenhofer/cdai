@@ -18,6 +18,8 @@ export interface ParsedQuery {
   readonly years: readonly string[];
   /** `in <name>`: only candidates whose root path contains this name qualify. */
   readonly rootFilter: string | null;
+  /** Folders a spelled path puts above its own name: required in the path, worth no score. */
+  readonly within: readonly string[];
 }
 
 const YEAR_PATTERN = /^\d{4}$/;
@@ -51,10 +53,11 @@ const PATH_NOISE = new Set([
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
 /** A word spelled as a location on this machine rather than as a name. */
 const LOCAL_PATH = /^~|\//u;
+const PATH_DOTS = new Set(['', '.', '..', '~']);
 const PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
 const MIN_NAME_LENGTH = 2;
-/** A word has at most this many readings, so one pasted link cannot fan the resolver out. */
-const MAX_NAME_READINGS = 4;
+/** A URL has at most this many readings, so one pasted link cannot fan the resolver out. */
+const MAX_URL_READINGS = 4;
 
 export const isYear = (token: string): boolean => {
   if (!YEAR_PATTERN.test(token)) return false;
@@ -109,18 +112,40 @@ export const localNames = (word: string): string[] => {
   return word
     .split('/')
     .map((segment) => segment.replace(PAGE_SUFFIX, ''))
-    .filter((segment) => segment.length >= MIN_NAME_LENGTH
-      && segment !== '..'
-      && !PATH_NOISE.has(segment))
+    // Only what names no folder at all goes; on a real path "docs" and "en" are real folders.
+    .filter((segment) => !PATH_DOTS.has(segment))
     .reverse();
 };
 
 /**
- * Every name one word can stand for, most specific first: what a link points at, what hosts it,
- * and what a typed-out path calls the place at its end.
+ * Every name one word can stand for, most specific first: what the link points at, then what
+ * hosts it. "franzai.com/writer" is the writer, not the site around it; when the path names
+ * nothing on this machine the host still answers.
  */
-export const spelledNames = (word: string): string[] =>
-  [...pathNames(word), ...hostLabels(word), ...localNames(word)];
+export const urlNames = (word: string): string[] => [...pathNames(word), ...hostLabels(word)];
+
+/**
+ * A typed-out path read as what it names and where that sits. Only the whole chain says what the
+ * path said - "./cdai/sr" means something like "sr" inside "cdai", while its last segment alone
+ * matches every "src" on the machine - but the folders above the name are a place, not a search
+ * term, so they gate the candidates without diluting the match. Null when no word spells a path.
+ */
+export const pathReading = (query: ParsedQuery): ParsedQuery | null => {
+  const tokens: string[] = [];
+  const within = [...query.within];
+  let spelled = false;
+  for (const token of query.tokens) {
+    const [deepest, ...above] = localNames(token);
+    if (deepest === undefined) {
+      tokens.push(token);
+      continue;
+    }
+    spelled = true;
+    tokens.push(deepest);
+    within.push(...above);
+  }
+  return spelled ? { ...query, tokens, within } : null;
+};
 
 export const splitWords = (input: string): string[] =>
   input
@@ -134,9 +159,9 @@ export const splitWords = (input: string): string[] =>
  * "nordwind.at", "amt.gv.at" - so the word the user typed always gets the first attempt; these
  * readings are only tried when that finds nothing.
  */
-export const nameReadings = (query: ParsedQuery): ParsedQuery[] => {
-  const names = query.tokens.map(spelledNames);
-  const depth = Math.min(MAX_NAME_READINGS, Math.max(0, ...names.map((list) => list.length)));
+export const urlReadings = (query: ParsedQuery): ParsedQuery[] => {
+  const names = query.tokens.map(urlNames);
+  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings: ParsedQuery[] = [];
   for (let level = 0; level < depth; level += 1) {
     const tokens = query.tokens.map((token, index) => {
@@ -201,9 +226,9 @@ export const tokenize = (input: string): ParsedQuery => {
   const tokens = meaningful.length > 0 ? meaningful : searchable;
   // An operator or year can also be a literal directory name when it is the entire query.
   if (tokens.length === 0 && words.length > 0) {
-    return { raw: input, tokens: words, order: 'none', years: [], rootFilter: null };
+    return { raw: input, tokens: words, order: 'none', years: [], rootFilter: null, within: [] };
   }
-  return { raw: input, tokens, order, years, rootFilter };
+  return { raw: input, tokens, order, years, rootFilter, within: [] };
 };
 
 export const tokenizeArgs = (args: readonly string[]): ParsedQuery => tokenize(args.join(' '));

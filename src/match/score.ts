@@ -123,6 +123,7 @@ const brevityBonus = (query: ParsedQuery, candidate: Candidate): number => {
 const passesFilters = (query: ParsedQuery, candidate: Candidate): boolean => {
   const lowerPath = candidate.path.toLowerCase();
   if (!query.years.every((year) => lowerPath.includes(year))) return false;
+  if (!query.within.every((folder) => lowerPath.includes(folder))) return false;
   if (query.rootFilter === null) return true;
   return candidate.root.toLowerCase().includes(query.rootFilter) || lowerPath.includes(query.rootFilter);
 };

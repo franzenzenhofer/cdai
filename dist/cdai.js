@@ -1387,6 +1387,7 @@ var brevityBonus = (query, candidate) => {
 var passesFilters = (query, candidate) => {
   const lowerPath = candidate.path.toLowerCase();
   if (!query.years.every((year) => lowerPath.includes(year))) return false;
+  if (!query.within.every((folder) => lowerPath.includes(folder))) return false;
   if (query.rootFilter === null) return true;
   return candidate.root.toLowerCase().includes(query.rootFilter) || lowerPath.includes(query.rootFilter);
 };
@@ -1529,9 +1530,10 @@ var PATH_NOISE = /* @__PURE__ */ new Set([
 ]);
 var URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
 var LOCAL_PATH = /^~|\//u;
+var PATH_DOTS = /* @__PURE__ */ new Set(["", ".", "..", "~"]);
 var PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
 var MIN_NAME_LENGTH = 2;
-var MAX_NAME_READINGS = 4;
+var MAX_URL_READINGS = 4;
 var isYear = (token) => {
   if (!YEAR_PATTERN.test(token)) return false;
   const value = Number.parseInt(token, 10);
@@ -1552,13 +1554,29 @@ var pathNames = (word) => {
 };
 var localNames = (word) => {
   if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word)) return [];
-  return word.split("/").map((segment) => segment.replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && segment !== ".." && !PATH_NOISE.has(segment)).reverse();
+  return word.split("/").map((segment) => segment.replace(PAGE_SUFFIX, "")).filter((segment) => !PATH_DOTS.has(segment)).reverse();
 };
-var spelledNames = (word) => [...pathNames(word), ...hostLabels(word), ...localNames(word)];
+var urlNames = (word) => [...pathNames(word), ...hostLabels(word)];
+var pathReading = (query) => {
+  const tokens = [];
+  const within = [...query.within];
+  let spelled = false;
+  for (const token of query.tokens) {
+    const [deepest, ...above] = localNames(token);
+    if (deepest === void 0) {
+      tokens.push(token);
+      continue;
+    }
+    spelled = true;
+    tokens.push(deepest);
+    within.push(...above);
+  }
+  return spelled ? { ...query, tokens, within } : null;
+};
 var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
-var nameReadings = (query) => {
-  const names = query.tokens.map(spelledNames);
-  const depth = Math.min(MAX_NAME_READINGS, Math.max(0, ...names.map((list) => list.length)));
+var urlReadings = (query) => {
+  const names = query.tokens.map(urlNames);
+  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings2 = [];
   for (let level = 0; level < depth; level += 1) {
     const tokens = query.tokens.map((token, index) => {
@@ -1612,9 +1630,9 @@ var tokenize = (input) => {
   const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
   const tokens = meaningful.length > 0 ? meaningful : searchable;
   if (tokens.length === 0 && words.length > 0) {
-    return { raw: input, tokens: words, order: "none", years: [], rootFilter: null };
+    return { raw: input, tokens: words, order: "none", years: [], rootFilter: null, within: [] };
   }
-  return { raw: input, tokens, order, years, rootFilter };
+  return { raw: input, tokens, order, years, rootFilter, within: [] };
 };
 var tokenizeArgs = (args) => tokenize(args.join(" "));
 
@@ -1724,7 +1742,10 @@ var decide = (ranked) => {
   }
   return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
-var readings = (query) => [query, ...nameReadings(query)];
+var readings = (query) => {
+  const spelled = pathReading(query);
+  return [query, ...spelled === null ? [] : [spelled], ...urlReadings(query)];
+};
 var looseCandidates = (query, input) => {
   const queries = readings(query);
   return buildCandidates(input).map((candidate) => ({
@@ -3183,7 +3204,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.11",
+  version: "0.3.12",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

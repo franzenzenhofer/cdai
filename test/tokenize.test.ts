@@ -6,7 +6,8 @@ import {
   tokenize,
   tokenizeArgs,
   localNames,
-  nameReadings,
+  pathReading,
+  urlReadings,
 } from '../src/match/tokenize.js';
 
 describe('tokenize', () => {
@@ -57,7 +58,7 @@ describe('tokenize', () => {
 
   it('offers the URL readings as later attempts, never as a replacement', () => {
     const readings = (input: string): string[][] =>
-      nameReadings(tokenize(input)).map((reading) => [...reading.tokens]);
+      urlReadings(tokenize(input)).map((reading) => [...reading.tokens]);
     expect(readings('lumenlab.com website')).toEqual([['lumenlab', 'website']]);
     expect(readings('the website of www.lumenlab.com')).toEqual([['website', 'lumenlab']]);
     expect(readings('https://tidewheel.orbit.dev/ game'))
@@ -75,9 +76,19 @@ describe('tokenize', () => {
     expect(localNames('./dev/petalwroks')).toEqual(['petalwroks', 'dev']);
     expect(localNames('~/clients/petalworks/06-workshop')).toEqual(['06-workshop', 'petalworks', 'clients']);
     expect(localNames('/var/log/newsletter.html')).toEqual(['newsletter', 'log', 'var']);
+    // On a real path "docs" and "en" name folders; only what names nothing at all goes.
+    expect(localNames('../docs/en')).toEqual(['en', 'docs']);
     // A bare name and a link are read by the rules that already own them.
     expect(localNames('petalworks')).toEqual([]);
     expect(localNames('https://tidewheel.orbit.dev/level/7')).toEqual([]);
+  });
+
+  it('reads a spelled path as one name inside the folders above it', () => {
+    expect(pathReading(tokenize('./cdai/sr'))).toMatchObject({ tokens: ['sr'], within: ['cdai'] });
+    expect(pathReading(tokenize('open this ~/clients/petalworks/slides')))
+      .toMatchObject({ tokens: ['slides'], within: ['petalworks', 'clients'] });
+    expect(pathReading(tokenize('petalworks'))).toBeNull();
+    expect(pathReading(tokenize('https://tidewheel.orbit.dev/level/7'))).toBeNull();
   });
 
   it('preserves stopwords when they are the only possible directory name', () => {

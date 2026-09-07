@@ -107,7 +107,7 @@ $ cdai that client with the flowers
 | `cdai open this ~/dev/2026-09-07/newsletter.html` | a path pasted among the words wins, and a file means its directory |
 | `cdai alias add -- the nudge game` | remember this directory under a name nothing could guess |
 | `cdai -P petal` | resolve the match to its physical path, following symlinks |
-| `cdai ./dev/squa` | a path `cd` cannot take is still read as the names it carries |
+| `cdai ./cdai/src` | a path `cd` cannot take names a place, scoped by the folders above it |
 | `cdai ~/some/dir` | native `cd` first; a path it can take is never guessed |
 | `cdai -` | use native `cd -` to return to the previous directory |
 | `cdai` | use native `cd` to return home |
@@ -136,8 +136,9 @@ The shell wrapper always gives native behavior the first chance:
 
 - `cdai`, `cdai -`, explicit paths, CDPATH and zsh's `cd old new` substitution stay native.
 - Nothing fails on a `cd` error before every other tier has spoken. A path the builtin refuses is
-  read as the names its segments carry, and a path landing on a file means the directory holding
-  it, so `cdai ./dev/squa` and `cdai open this ~/2026-09-07/newsletter.html` both land.
+  read as what it names inside the folders written above it - those gate the candidates without
+  competing for the match - and a path landing on a file means the directory holding it, so
+  `cdai ./cdai/src`, `cdai ./dev/squa` and `cdai open this ~/2026-09-07/newsletter.html` all land.
 - The builtin's own error is the last word, not the first: it is printed only when the index,
   memory and AI all had nothing, and only where `cd` could have taken those words at all.
 - `-L` preserves the logical symlink path; `-P` resolves symlinks to the physical path. Both
