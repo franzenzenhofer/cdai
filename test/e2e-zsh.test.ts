@@ -180,6 +180,9 @@ describe('cdai in a real zsh', () => {
     expect(secondPath.stdout).toContain(`exit=${EXIT_ERROR}`);
     expect(secondPath.stderr).not.toContain('no match');
     expect(path.stderr).not.toMatch(/cdai:cd:\d+/);
+    // zsh names the failing function, with a line number once it came from an eval.
+    expect(path.stderr.trim()).toBe('cdai: cd: no such file or directory: ./definitely-missing');
+    expect(secondPath.stderr).not.toContain('__cdai_native_error');
   });
 
   it('preserves zsh native old-new directory substitution', () => {

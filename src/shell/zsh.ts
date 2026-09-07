@@ -49,10 +49,16 @@ __cdai_explicit() {
   return 1
 }`;
 
+/**
+ * zsh prefixes the message with the failing function, and adds a line number whenever that
+ * function came from an eval - which is exactly how the integration is loaded. Both shapes are
+ * removed, so the user reads "cdai: cd: no such file or directory: ./x" and nothing internal.
+ */
 const nativeError = (): string => `__cdai_native_error() {
   local output result_status
   output="$(builtin cd "$@" 2>&1)"
   result_status=$?
+  output="\${output#*:cd:<->: }"
   output="\${output#*:cd: }"
   [[ -n "$output" ]] && print -u2 -- "cdai: cd: $output"
   return $result_status

@@ -2961,6 +2961,7 @@ var nativeError2 = () => `__cdai_native_error() {
   local output result_status
   output="$(builtin cd "$@" 2>&1)"
   result_status=$?
+  output="\${output#*:cd:<->: }"
   output="\${output#*:cd: }"
   [[ -n "$output" ]] && print -u2 -- "cdai: cd: $output"
   return $result_status
@@ -3044,7 +3045,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.7",
+  version: "0.3.8",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {
