@@ -5,7 +5,7 @@ import { loadConfig, type Config } from '../config.js';
 import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
-import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
+import { tokenize, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
 import {
   absolutize,
   contractTilde,
@@ -17,7 +17,13 @@ import {
 import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
-import { findAlias, forgetAlias, rememberAlias } from '../store/aliases.js';
+import {
+  findAlias,
+  findAliasWhere,
+  forgetAlias,
+  rememberAlias,
+  type IntentAlias,
+} from '../store/aliases.js';
 import { isStale, loadIndex, matchesConfig, refreshIndex, type DirIndex } from '../store/indexer.js';
 
 const MILLIS_PER_SECOND = 1000;
@@ -59,12 +65,21 @@ const jumpExisting = (path: string): ExitCode => {
   return jumpKnown(path);
 };
 
+/** The stopwords a query drops are exactly the words two typings of one intent disagree on. */
+const aliasFor = (query: ParsedQuery): IntentAlias | undefined => {
+  const exact = findAlias(query.raw);
+  if (exact !== undefined) return exact;
+  const phrase = query.tokens.join(' ');
+  if (phrase === '') return undefined;
+  return findAliasWhere((stored) => tokenize(stored).tokens.join(' ') === phrase);
+};
+
 const recalledAlias = (context: QueryContext): ExitCode | null => {
-  const alias = findAlias(context.query.raw);
+  const alias = aliasFor(context.query);
   if (alias === undefined) return null;
   const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
-  forgetAlias(context.query.raw);
+  forgetAlias(alias.query);
   return null;
 };
 

@@ -182,6 +182,8 @@ $ cdai the nudge game
 → ~/dev/games/notchi
 ```
 
+Filler words do not have to match: `cdai nudge game` and `cdai go to the nudge game folder` find
+the same alias, because both read as the same intent.
 `cdai alias add ~/dev/games/notchi -- the nudge game` names a directory you are not standing in.
 The directory has to exist and live under a configured root, because an alias outside the roots
 is dropped the moment it is used - so cdai refuses it up front instead of forgetting it later.
@@ -264,7 +266,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.3.9 release suite covers 247 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.3.10 release suite covers 247 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.

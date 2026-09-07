@@ -415,6 +415,7 @@ var findAlias = (query) => {
   if (normalized === "") return void 0;
   return loadAliases().aliases.find((alias) => alias.query === normalized);
 };
+var findAliasWhere = (accepts) => loadAliases().aliases.find((alias) => accepts(alias.query));
 var rememberAlias = (query, path, updatedAt) => {
   const normalized = normalizeIntent(query);
   if (normalized === "" || normalized.length > MAX_QUERY_LENGTH || !isAbsolute2(path) || !isProtocolSafePath(path)) return;
@@ -2231,12 +2232,19 @@ var jumpExisting = (path) => {
   }
   return jumpKnown(path);
 };
+var aliasFor = (query) => {
+  const exact = findAlias(query.raw);
+  if (exact !== void 0) return exact;
+  const phrase = query.tokens.join(" ");
+  if (phrase === "") return void 0;
+  return findAliasWhere((stored) => tokenize(stored).tokens.join(" ") === phrase);
+};
 var recalledAlias = (context) => {
-  const alias = findAlias(context.query.raw);
+  const alias = aliasFor(context.query);
   if (alias === void 0) return null;
   const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
-  forgetAlias(context.query.raw);
+  forgetAlias(alias.query);
   return null;
 };
 var acceptAi = (outcome, context) => {
@@ -3143,7 +3151,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.9",
+  version: "0.3.10",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {

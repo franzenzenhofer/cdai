@@ -352,6 +352,10 @@ describe('cli surface', () => {
     expect(added.status).toBe(0);
     expect(added.stderr).toContain('the nudge game');
     expect(runCli('query', '--', 'the', 'nudge', 'game').stdout.trim()).toBe(target);
+    // The filler words two typings disagree on must not hide the same intent.
+    expect(runCli('query', '--', 'nudge', 'game').stdout.trim()).toBe(target);
+    expect(runCli('query', '--', 'go', 'to', 'the', 'nudge', 'game', 'folder').stdout.trim())
+      .toBe(target);
     expect(runCli('alias', 'list').stderr).toContain('the nudge game');
     expect(runCli('alias', 'forget', '--', 'the', 'nudge', 'game').status).toBe(0);
     expect(runCli('query', '--', 'the', 'nudge', 'game').status).toBe(1);

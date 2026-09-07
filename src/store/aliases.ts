@@ -63,6 +63,15 @@ export const findAlias = (query: string): IntentAlias | undefined => {
   return loadAliases().aliases.find((alias) => alias.query === normalized);
 };
 
+/**
+ * The first remembered intent the caller accepts. Filler words differ between two typings of the
+ * same thing ("the nudge game", "nudge game folder"), and only the caller knows how a query is
+ * read, so the comparison itself stays out of the store.
+ */
+export const findAliasWhere = (
+  accepts: (query: string) => boolean,
+): IntentAlias | undefined => loadAliases().aliases.find((alias) => accepts(alias.query));
+
 export const rememberAlias = (query: string, path: string, updatedAt: number): void => {
   const normalized = normalizeIntent(query);
   if (normalized === '' || normalized.length > MAX_QUERY_LENGTH || !isAbsolute(path) || !isProtocolSafePath(path)) return;
