@@ -128,7 +128,7 @@ const managementCompleter = (): string => `if [ "$COMP_CWORD" -ge 2 ]; then
       esac
       return ;;
     index) COMPREPLY=( $(compgen -W '--refresh --help' -- "$current") ); return ;;
-    alias) COMPREPLY=( $(compgen -W 'list forget --help' -- "$current") ); return ;;
+    alias) COMPREPLY=( $(compgen -W 'list add forget --help' -- "$current") ); return ;;
     init) COMPREPLY=( $(compgen -W 'zsh bash fish --help' -- "$current") ); return ;;
     import) COMPREPLY=( $(compgen -W 'zoxide --help' -- "$current") ); return ;;
     doctor) COMPREPLY=( $(compgen -W '--help' -- "$current") ); return ;;

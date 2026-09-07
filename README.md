@@ -101,8 +101,10 @@ $ cdai that client with the flowers
 | `cdai oldest petalworks` | open the oldest child directory |
 | `cdai petalworks 2025` | require `2025` somewhere in the matched path |
 | `cdai squash in dev` | restrict the search to the matching configured root |
-| `cdai https://tidewheel.orbit.dev` | jump to the project behind a pasted URL, subdomain first |
+| `cdai https://tidewheel.orbit.dev` | jump to the project behind a pasted URL |
+| `cdai https://github.com/octocat/tidewheel` | a link is named by what it points at, then by its host |
 | `cdai file:///Users/me/dev` | cd into a directory pasted as a `file://` URL |
+| `cdai alias add -- the nudge game` | remember this directory under a name nothing could guess |
 | `cdai -P petal` | resolve the match to its physical path, following symlinks |
 | `cdai ~/some/dir` | use native `cd`; explicit paths are never guessed |
 | `cdai -` | use native `cd -` to return to the previous directory |
@@ -153,6 +155,9 @@ cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]
 cdai index [--refresh]    show or rebuild the directory index
 cdai import zoxide        seed frecency from an existing zoxide database
 cdai alias list           show confirmed local intent aliases
+cdai alias add [<path>] -- <words>
+                          remember a directory, defaulting to the current one, under a
+                          name no matcher could guess
 cdai alias forget -- <words>
                           forget a mistaken confirmed alias
 cdai doctor               show what cdai sees on this machine
@@ -162,6 +167,25 @@ cdai --version
 Exit codes: `0` success, `3` a navigation choice was deliberately aborted, anything else is an
 error. stdout carries the resolved path and nothing else; every human-readable byte goes to
 stderr.
+
+### Teaching a name yourself
+
+Some names are unguessable: a game called `notchi` is not spelled `nudge`, and no matcher or
+model gets there from the letters. Name it once and it is a local, model-free alias from then on:
+
+```console
+$ cd ~/dev/games/notchi
+$ cdai alias add -- the nudge game
+cdai: "the nudge game" -> ~/dev/games/notchi
+
+$ cdai the nudge game
+→ ~/dev/games/notchi
+```
+
+`cdai alias add ~/dev/games/notchi -- the nudge game` names a directory you are not standing in.
+The directory has to exist and live under a configured root, because an alias outside the roots
+is dropped the moment it is used - so cdai refuses it up front instead of forgetting it later.
+`cdai alias list` shows every remembered name, `cdai alias forget -- <words>` removes one.
 
 ## Why this exists
 
@@ -240,7 +264,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.3.8 release suite covers 242 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.3.9 release suite covers 247 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
@@ -255,8 +279,8 @@ source tree.
         │ tokenize              │  operators: latest/oldest, 2026, "in dev"
         │                       │  stopwords: folder, dir, the, project, go, to, my,
         │                       │             of, a, an, for, from
-        │                       │  hosts: literal first, then
-        │                       │         tidewheel.orbit.dev -> tidewheel, orbit
+        │                       │  URLs: literal first, then
+        │                       │        orbit.dev/tidewheel -> tidewheel, orbit
         └───────────┬───────────┘
                     ▼
         ┌───────────────────────┐        ┌──────────────────┐
@@ -281,15 +305,19 @@ bonus for living under your current directory. All tokens must match (AND). A di
 own parent collapse into one answer, because they are the same place, not two options. Every
 threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
 
-**A host is read again as its names.** The word you typed always goes first, so a folder
-literally called `nordwind.at` or `amt.gv.at` still wins outright. Only when the literal word
-matches nothing does cdai read it as a host and search for the names it decorates, most specific
-first: `lumenlab.com`, `www.lumenlab.com` and `https://www.lumenlab.com/blog` all search for
-`lumenlab`, so `cdai lumenlab.com website` lands on `~/dev/lumenlab-website` without calling a
-model, and `https://tidewheel.orbit.dev/level/7` searches for `tidewheel`, then for `orbit`. A URL
-is intent, never a path: pasting one, alone or inside a sentence, never reaches `cd`, which could
-only fail on it. The host reading needs a real public suffix, so `node.js` and `vite.config` are
-never anything but literal names.
+**A URL is read again as the names it carries.** The word you typed always goes first, so a
+folder literally called `nordwind.at` or `amt.gv.at` still wins outright. Only when the literal
+word matches nothing does cdai read the link, most specific name first: what it points at, then
+what hosts it. `https://github.com/octocat/tidewheel` searches for `tidewheel`, then `octocat` -
+nobody's project is called `github`, so the platforms name nothing. `https://franzai.com/writer`
+searches for `writer` before `franzai`, and `https://tidewheel.orbit.dev/level/7` searches for
+`tidewheel`, then `orbit`, because `level/7` only numbers a page. `lumenlab.com`,
+`www.lumenlab.com` and `https://www.lumenlab.com/blog` all still search for `lumenlab`, so
+`cdai lumenlab.com website` lands on `~/dev/lumenlab-website` without calling a model.
+
+A URL is intent, never a path: pasting one, alone or inside a sentence, never reaches `cd`, which
+could only fail on it. The host reading needs a real public suffix, so `node.js` and
+`vite.config` are never anything but literal names.
 
 ## AI backends
 

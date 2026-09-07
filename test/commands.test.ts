@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseZoxideList } from '../src/commands/import-zoxide.js';
@@ -341,6 +341,50 @@ describe('cli surface', () => {
     expect(runCli('alias', 'list').stderr).toContain('flower client');
     expect(runCli('alias', 'forget', '--', 'flower', 'client').status).toBe(0);
     expect(runCli('alias', 'list').stderr).toContain('no confirmed intent aliases');
+  });
+
+  it('teaches an alias for a name no matcher could guess, and refuses a useless one', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const target = join(fixture.projects, 'arcade', 'tidewheel');
+    expect(runCli('query', '--', 'the', 'nudge', 'game').status).toBe(1);
+    const added = runCli('alias', 'add', target, '--', 'The', 'Nudge', 'Game');
+    expect(added.status).toBe(0);
+    expect(added.stderr).toContain('the nudge game');
+    expect(runCli('query', '--', 'the', 'nudge', 'game').stdout.trim()).toBe(target);
+    expect(runCli('alias', 'list').stderr).toContain('the nudge game');
+    expect(runCli('alias', 'forget', '--', 'the', 'nudge', 'game').status).toBe(0);
+    expect(runCli('query', '--', 'the', 'nudge', 'game').status).toBe(1);
+    const missing = runCli('alias', 'add', join(fixture.projects, 'ghost'), '--', 'ghost');
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain('no such directory');
+    const outside = runCli('alias', 'add', '/tmp', '--', 'temp');
+    expect(outside.status).toBe(1);
+    expect(outside.stderr).toContain('outside every configured root');
+    const wordless = runCli('alias', 'add', '--', ' ');
+    expect(wordless.status).toBe(1);
+    expect(wordless.stderr).toContain('missing words to remember');
+    const pathLike = runCli('alias', 'add', target);
+    expect(pathLike.status).toBe(1);
+    expect(pathLike.stderr).toContain('put the directory before --');
+  });
+
+  it('remembers the current directory when no path is given', () => {
+    writeConfig(fixture);
+    expect(runCli('index', '--refresh').status).toBe(0);
+    const cwdRun = spawnSync('node', [BIN, 'alias', 'add', '--', 'right', 'here'], {
+      encoding: 'utf8',
+      cwd: join(fixture.projects, 'arcade'),
+      env: {
+        PATH: process.env['PATH'] ?? '',
+        HOME: fixture.rootDir,
+        CDAI_CONFIG_DIR: fixture.configDir,
+        CDAI_DATA_DIR: fixture.dataDir,
+      },
+    });
+    expect(cwdRun.status).toBe(0);
+    expect(runCli('query', '--', 'right', 'here').stdout.trim())
+      .toBe(realpathSync(join(fixture.projects, 'arcade')));
   });
 
   it('writes and migrates private state permissions', () => {

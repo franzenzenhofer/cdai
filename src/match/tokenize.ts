@@ -32,19 +32,36 @@ const TLDS = new Set([
   'cloud', 'site', 'online', 'shop', 'blog', 'at', 'de', 'ch', 'uk', 'eu', 'it', 'fr', 'es',
   'nl', 'pl', 'cz', 'hu', 'si', 'sk', 'us', 'ca', 'au', 'nz', 'jp', 'cn', 'in', 'br',
 ]);
-/** Labels that decorate a host without naming it, in either the sub- or the second level. */
+/**
+ * Labels that decorate a host without naming it, in either the sub- or the second level. The
+ * platforms belong here too: nobody's project is called "github" or "pages", so a link to one
+ * is named by its path instead.
+ */
 const HOST_NOISE = new Set([
   'www', 'm', 'web', 'shop', 'blog', 'app', 'api', 'dev', 'staging', 'test', 'mail',
   'co', 'com', 'net', 'org', 'gov', 'gv', 'edu', 'ac',
+  'github', 'gitlab', 'bitbucket', 'codeberg', 'sourceforge', 'npmjs', 'huggingface',
+  'pages', 'workers', 'vercel', 'netlify', 'herokuapp', 'replit', 'glitch',
 ]);
-/** A host has at most this many readings, so a long host cannot fan the resolver out. */
-const MAX_HOST_READINGS = 3;
+/** Path segments that number or decorate a page without naming the project behind it. */
+const PATH_NOISE = new Set([
+  'index', 'home', 'en', 'de', 'at', 'us', 'uk', 'p', 'page', 'pages', 'blog', 'post', 'posts',
+  'docs', 'doc', 'level', 'tag', 'tags', 'category', 'search', 'www', 'main', 'master',
+]);
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
+const PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
+const MIN_NAME_LENGTH = 2;
+/** A URL has at most this many readings, so one pasted link cannot fan the resolver out. */
+const MAX_URL_READINGS = 4;
 
 export const isYear = (token: string): boolean => {
   if (!YEAR_PATTERN.test(token)) return false;
   const value = Number.parseInt(token, 10);
   return value >= YEAR_MIN && value <= YEAR_MAX;
 };
+
+const stripScheme = (word: string): string =>
+  word.replace(URL_SCHEME, '').replace(/[.,;:!?]+$/u, '');
 
 /**
  * The labels of a host that can name a directory, most specific first. A host is a name plus
@@ -55,15 +72,37 @@ export const isYear = (token: string): boolean => {
  * "node.js" and "vite.config" stay literal directory names.
  */
 export const hostLabels = (word: string): string[] => {
-  const bare = word.replace(/^[a-z]+:\/\//u, '').replace(/[.,;:!?]+$/u, '');
+  const bare = stripScheme(word);
   if (!HOST_PATTERN.test(bare)) return [];
   const labels = bare.split('/')[0]?.split('.') ?? [];
   if (!TLDS.has(labels.at(-1) ?? '')) return [];
   return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
 };
 
-/** The one label that names the host best, or the word itself when it is not a host. */
-export const hostLabel = (word: string): string => hostLabels(word)[0] ?? word;
+/**
+ * The names a URL carries in its path, deepest first: a repository, a product or a project is
+ * routinely the last segment ("github.com/octocat/tidewheel"), while the segments that only
+ * paginate or localise a page name nothing.
+ */
+export const pathNames = (word: string): string[] => {
+  const bare = stripScheme(word);
+  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare)) return [];
+  return bare
+    .split('/')
+    .slice(1)
+    .map((segment) => (segment.split('?')[0] ?? '').replace(PAGE_SUFFIX, ''))
+    .filter((segment) => segment.length >= MIN_NAME_LENGTH
+      && !/^\d+$/u.test(segment)
+      && !PATH_NOISE.has(segment))
+    .reverse();
+};
+
+/**
+ * Every name one word can stand for, most specific first: what the link points at, then what
+ * hosts it. "franzai.com/writer" is the writer, not the site around it; when the path names
+ * nothing on this machine the host still answers.
+ */
+export const urlNames = (word: string): string[] => [...pathNames(word), ...hostLabels(word)];
 
 export const splitWords = (input: string): string[] =>
   input
@@ -72,18 +111,18 @@ export const splitWords = (input: string): string[] =>
     .filter((word) => word !== '');
 
 /**
- * The same query read as host names instead of literal words, best reading first, empty when no
- * word is a host. Client folders are routinely named after the site itself, decoration and all -
+ * The same query read as the names its words stand for, best reading first, empty when no word
+ * carries any. Client folders are routinely named after the site itself, decoration and all -
  * "nordwind.at", "amt.gv.at" - so the word the user typed always gets the first attempt; these
  * readings are only tried when that finds nothing.
  */
-export const hostReadings = (query: ParsedQuery): ParsedQuery[] => {
-  const labels = query.tokens.map(hostLabels);
-  const depth = Math.min(MAX_HOST_READINGS, Math.max(0, ...labels.map((list) => list.length)));
+export const urlReadings = (query: ParsedQuery): ParsedQuery[] => {
+  const names = query.tokens.map(urlNames);
+  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings: ParsedQuery[] = [];
   for (let level = 0; level < depth; level += 1) {
     const tokens = query.tokens.map((token, index) => {
-      const list = labels[index] ?? [];
+      const list = names[index] ?? [];
       return list[Math.min(level, list.length - 1)] ?? token;
     });
     const known = [query, ...readings];

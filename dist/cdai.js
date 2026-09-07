@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
+// src/config.ts
+import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
+
 // src/paths.ts
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, sep } from "node:path";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 var APP_NAME = "cdai";
 var TMP_SUFFIX = ".tmp";
 var PRIVATE_FILE_MODE = 384;
@@ -74,6 +77,14 @@ var isUnder = (child, parent) => {
   const p = resolve(parent);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
 };
+var isUnderRoot = (child, root) => isUnder(child, root) || isUnder(realPathOr(child), realPathOr(root));
+var realPathOr = (path) => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+};
 var isDirectory = (path) => {
   try {
     return existsSync(path) && statSync(path).isDirectory();
@@ -118,51 +129,11 @@ var hasPrivateMode = (path, directory) => {
   }
 };
 
-// src/protocol.ts
-var EXIT = {
-  /** A path was printed on stdout, the shell function should cd to it. */
-  ok: 0,
-  /** Something went wrong (no match, bad usage, unreadable config). */
-  error: 1,
-  /** A navigation request was handled but deliberately aborted, so the shell stays put. */
-  noCd: 3
-};
-var emitPath = (path) => {
-  process.stdout.write(`${path}
-`);
-};
-var note = (message) => {
-  process.stderr.write(`${message}
-`);
-};
-var jump = (path) => {
-  note(`\u2192 ${contractTilde(path)}`);
-  emitPath(path);
-};
-var fail = (message, hint) => {
-  note(`cdai: ${message}`);
-  if (hint !== void 0) note(`      ${hint}`);
-};
-
-// src/store/aliases.ts
-import { existsSync as existsSync3 } from "node:fs";
-import { isAbsolute as isAbsolute2 } from "node:path";
-
-// src/json.ts
-import { readFileSync } from "node:fs";
-var tryReadJson = (file) => {
-  try {
-    return JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    return void 0;
-  }
-};
-
 // src/store/lock.ts
 import {
   existsSync as existsSync2,
   mkdirSync as mkdirSync2,
-  readFileSync as readFileSync2,
+  readFileSync,
   renameSync as renameSync2,
   rmSync,
   statSync as statSync2,
@@ -184,7 +155,7 @@ var parseLockOwner = (value) => {
 };
 var readOwner = (ownerFile) => {
   try {
-    return parseLockOwner(JSON.parse(readFileSync2(ownerFile, "utf8")));
+    return parseLockOwner(JSON.parse(readFileSync(ownerFile, "utf8")));
   } catch {
     return null;
   }
@@ -297,14 +268,124 @@ var withStateLock = (stateFile, action) => {
   }
 };
 
+// src/config.ts
+var DEFAULT_DEPTH = 2;
+var MAX_DEPTH = 64;
+var DEFAULT_IGNORE = [
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".next",
+  ".cache"
+];
+var DEFAULT_AI = {
+  enabled: true,
+  command: "auto",
+  args: [],
+  model: "",
+  /** Long enough for remote CLI cold starts while still bounding a failed backend. */
+  timeoutMs: 45e3
+};
+var MAX_TIMER_MS = 2147483647;
+var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var readRoots = (value) => {
+  if (!Array.isArray(value)) return [];
+  const roots = /* @__PURE__ */ new Map();
+  for (const entry of value) {
+    const rawPath = typeof entry === "string" ? entry : isRecord2(entry) ? entry["path"] : void 0;
+    if (typeof rawPath !== "string" || rawPath.trim() === "") continue;
+    const rawDepth = isRecord2(entry) ? entry["depth"] : void 0;
+    const validDepth2 = typeof rawDepth === "number" && Number.isFinite(rawDepth) && rawDepth > 0 ? Math.min(MAX_DEPTH, Math.floor(rawDepth)) : DEFAULT_DEPTH;
+    const path = absolutize(rawPath);
+    roots.set(path, { path, depth: validDepth2 });
+  }
+  return [...roots.values()];
+};
+var readAi = (value) => {
+  if (!isRecord2(value)) return { ...DEFAULT_AI };
+  const args = value["args"];
+  const command = value["command"];
+  const timeoutMs = value["timeoutMs"];
+  return {
+    enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_AI.enabled,
+    command: typeof command === "string" && command.trim() !== "" ? command : DEFAULT_AI.command,
+    args: Array.isArray(args) ? args.filter((a) => typeof a === "string") : [],
+    model: typeof value["model"] === "string" ? value["model"] : DEFAULT_AI.model,
+    timeoutMs: typeof timeoutMs === "number" && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMER_MS ? timeoutMs : DEFAULT_AI.timeoutMs
+  };
+};
+var readIgnore = (value) => Array.isArray(value) ? value.filter((v) => typeof v === "string") : [...DEFAULT_IGNORE];
+var emptyConfig = () => ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI } });
+var configExists = () => existsSync3(configFile());
+var loadConfig = () => {
+  const file = configFile();
+  if (!existsSync3(file)) return emptyConfig();
+  const raw = readFileSync2(file, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!isRecord2(parsed)) throw new Error(`config is not a JSON object: ${file}`);
+  return {
+    roots: readRoots(parsed["roots"]),
+    ignore: readIgnore(parsed["ignore"]),
+    ai: readAi(parsed["ai"])
+  };
+};
+var saveConfig = (config) => {
+  withStateLock(configFile(), () => writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}
+`));
+};
+
+// src/protocol.ts
+var EXIT = {
+  /** A path was printed on stdout, the shell function should cd to it. */
+  ok: 0,
+  /** Something went wrong (no match, bad usage, unreadable config). */
+  error: 1,
+  /** A navigation request was handled but deliberately aborted, so the shell stays put. */
+  noCd: 3
+};
+var emitPath = (path) => {
+  process.stdout.write(`${path}
+`);
+};
+var note = (message) => {
+  process.stderr.write(`${message}
+`);
+};
+var jump = (path) => {
+  note(`\u2192 ${contractTilde(path)}`);
+  emitPath(path);
+};
+var fail = (message, hint) => {
+  note(`cdai: ${message}`);
+  if (hint !== void 0) note(`      ${hint}`);
+};
+
+// src/store/aliases.ts
+import { existsSync as existsSync4 } from "node:fs";
+import { isAbsolute as isAbsolute2 } from "node:path";
+
+// src/json.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+var tryReadJson = (file) => {
+  try {
+    return JSON.parse(readFileSync3(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+};
+
 // src/store/aliases.ts
 var ALIAS_VERSION = 1;
 var MAX_ALIASES = 256;
 var MAX_QUERY_LENGTH = 512;
-var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/g, " ");
 var readAlias = (value) => {
-  if (!isRecord2(value)) return void 0;
+  if (!isRecord3(value)) return void 0;
   const { query, path, updatedAt } = value;
   if (typeof query !== "string" || query === "" || query.length > MAX_QUERY_LENGTH) return void 0;
   if (typeof path !== "string" || !isAbsolute2(path) || !isProtocolSafePath(path)) return void 0;
@@ -314,12 +395,12 @@ var readAlias = (value) => {
 var emptyAliases = () => ({ version: ALIAS_VERSION, aliases: [] });
 var loadAliases = () => {
   const file = aliasesFile();
-  if (!existsSync3(file)) return emptyAliases();
+  if (!existsSync4(file)) return emptyAliases();
   const parsed = tryReadJson(file);
-  if (isRecord2(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
+  if (isRecord3(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
     throw new Error(`unsupported alias schema version ${String(parsed["version"])}; state was not modified`);
   }
-  if (!isRecord2(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"])) {
+  if (!isRecord3(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"])) {
     return emptyAliases();
   }
   const aliases = parsed["aliases"].slice(0, MAX_ALIASES).map(readAlias).filter((a) => a !== void 0);
@@ -354,11 +435,49 @@ var forgetAlias = (query) => {
 };
 
 // src/commands/alias.ts
+var MILLIS_PER_SECOND = 1e3;
 var ALIAS_USAGE = [
   "usage:",
   "  cdai alias list",
+  "  cdai alias add [<path>] -- <words>",
   "  cdai alias forget -- <words>"
 ].join("\n");
+var looksLikePath = (word) => word.includes("/") || word.startsWith("~");
+var readAddArgs = (args) => {
+  const separator = args.indexOf("--");
+  const before = separator === -1 ? [] : args.slice(0, separator);
+  const words = separator === -1 ? args : args.slice(separator + 1);
+  if (before.length > 1) return "one directory at a time";
+  if (separator === -1 && words.some(looksLikePath)) return "put the directory before --";
+  const query = normalizeIntent(words.join(" "));
+  if (query === "") return "missing words to remember";
+  return { path: absolutize(before[0] ?? process.cwd()), query };
+};
+var rejection = (path) => {
+  if (!isDirectory(path)) return `no such directory: ${contractTilde(path)}`;
+  if (!isProtocolSafePath(path)) return "directory contains a line break unsupported by shell transport";
+  if (loadConfig().roots.some((root) => isUnderRoot(path, root.path))) return null;
+  return `${contractTilde(path)} is outside every configured root; add it with \`cdai setup\``;
+};
+var add = (args) => {
+  if (args[0] === "--help" || args[0] === "-h") {
+    note(ALIAS_USAGE);
+    return EXIT.ok;
+  }
+  const input = readAddArgs(args);
+  if (typeof input === "string") {
+    fail(input, ALIAS_USAGE);
+    return EXIT.error;
+  }
+  const rejected = rejection(input.path);
+  if (rejected !== null) {
+    fail(rejected);
+    return EXIT.error;
+  }
+  rememberAlias(input.query, input.path, Math.floor(Date.now() / MILLIS_PER_SECOND));
+  note(`cdai: "${input.query}" -> ${contractTilde(input.path)}`);
+  return EXIT.ok;
+};
 var forget = (args) => {
   if (args[0] === "--help" || args[0] === "-h") {
     note(ALIAS_USAGE);
@@ -393,6 +512,7 @@ var runAlias = (args) => {
     aliases.forEach((alias) => note(`${alias.query} -> ${contractTilde(alias.path)}`));
     return EXIT.ok;
   }
+  if (command === "add") return add(args.slice(1));
   if (command === "forget") return forget(args.slice(1));
   fail("unknown alias command", ALIAS_USAGE);
   return EXIT.error;
@@ -516,77 +636,6 @@ var aiArgs = (backend2, prompt) => {
 };
 var backendLabel = (backend2) => backend2.model === "" ? backend2.kind : `${backend2.kind} ${backend2.model}`;
 
-// src/config.ts
-import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
-var DEFAULT_DEPTH = 2;
-var MAX_DEPTH = 64;
-var DEFAULT_IGNORE = [
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  ".venv",
-  "venv",
-  "__pycache__",
-  ".next",
-  ".cache"
-];
-var DEFAULT_AI = {
-  enabled: true,
-  command: "auto",
-  args: [],
-  model: "",
-  /** Long enough for remote CLI cold starts while still bounding a failed backend. */
-  timeoutMs: 45e3
-};
-var MAX_TIMER_MS = 2147483647;
-var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var readRoots = (value) => {
-  if (!Array.isArray(value)) return [];
-  const roots = /* @__PURE__ */ new Map();
-  for (const entry of value) {
-    const rawPath = typeof entry === "string" ? entry : isRecord3(entry) ? entry["path"] : void 0;
-    if (typeof rawPath !== "string" || rawPath.trim() === "") continue;
-    const rawDepth = isRecord3(entry) ? entry["depth"] : void 0;
-    const validDepth2 = typeof rawDepth === "number" && Number.isFinite(rawDepth) && rawDepth > 0 ? Math.min(MAX_DEPTH, Math.floor(rawDepth)) : DEFAULT_DEPTH;
-    const path = absolutize(rawPath);
-    roots.set(path, { path, depth: validDepth2 });
-  }
-  return [...roots.values()];
-};
-var readAi = (value) => {
-  if (!isRecord3(value)) return { ...DEFAULT_AI };
-  const args = value["args"];
-  const command = value["command"];
-  const timeoutMs = value["timeoutMs"];
-  return {
-    enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_AI.enabled,
-    command: typeof command === "string" && command.trim() !== "" ? command : DEFAULT_AI.command,
-    args: Array.isArray(args) ? args.filter((a) => typeof a === "string") : [],
-    model: typeof value["model"] === "string" ? value["model"] : DEFAULT_AI.model,
-    timeoutMs: typeof timeoutMs === "number" && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMER_MS ? timeoutMs : DEFAULT_AI.timeoutMs
-  };
-};
-var readIgnore = (value) => Array.isArray(value) ? value.filter((v) => typeof v === "string") : [...DEFAULT_IGNORE];
-var emptyConfig = () => ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI } });
-var configExists = () => existsSync4(configFile());
-var loadConfig = () => {
-  const file = configFile();
-  if (!existsSync4(file)) return emptyConfig();
-  const raw = readFileSync3(file, "utf8");
-  const parsed = JSON.parse(raw);
-  if (!isRecord3(parsed)) throw new Error(`config is not a JSON object: ${file}`);
-  return {
-    roots: readRoots(parsed["roots"]),
-    ignore: readIgnore(parsed["ignore"]),
-    ai: readAi(parsed["ai"])
-  };
-};
-var saveConfig = (config) => {
-  withStateLock(configFile(), () => writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}
-`));
-};
-
 // src/picker.ts
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync as existsSync5, openSync, readSync } from "node:fs";
@@ -682,7 +731,7 @@ var needsAging = (records) => totalVisits(records) > AGING_THRESHOLD;
 var applyAging = (records) => records.map((r) => ({ ...r, visits: r.visits * AGING_FACTOR })).filter((r) => r.visits >= AGING_DROP_BELOW);
 
 // src/store/db-records.ts
-import { realpathSync } from "node:fs";
+import { realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute as isAbsolute4, resolve as resolve3 } from "node:path";
 var MAX_DB_RECORDS = 1e4;
 var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -698,7 +747,7 @@ var readVisitRecord = (value) => {
 };
 var canonicalPath = (path) => {
   try {
-    return realpathSync(path);
+    return realpathSync2(path);
   } catch {
     return resolve3(path);
   }
@@ -909,11 +958,11 @@ var updateDb = (update) => withStateLock(dbFile(), () => {
 });
 
 // src/store/indexer.ts
-import { existsSync as existsSync8, readdirSync as readdirSync3, realpathSync as realpathSync3, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync8, readdirSync as readdirSync3, realpathSync as realpathSync4, statSync as statSync5 } from "node:fs";
 import { basename as basename3, join as join4 } from "node:path";
 
 // src/store/index-schema.ts
-import { realpathSync as realpathSync2 } from "node:fs";
+import { realpathSync as realpathSync3 } from "node:fs";
 import { isAbsolute as isAbsolute6 } from "node:path";
 var PREVIOUS_INDEX_VERSION = 2;
 var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -934,7 +983,7 @@ var currentEntry = (value) => {
 };
 var canonical = (path) => {
   try {
-    return realpathSync2(path);
+    return realpathSync3(path);
   } catch {
     return void 0;
   }
@@ -1017,7 +1066,7 @@ var shouldStop = (state) => {
 };
 var canonical2 = (dir) => {
   try {
-    return realpathSync3(dir);
+    return realpathSync4(dir);
   } catch {
     return void 0;
   }
@@ -1408,29 +1457,78 @@ var HOST_NOISE = /* @__PURE__ */ new Set([
   "gov",
   "gv",
   "edu",
-  "ac"
+  "ac",
+  "github",
+  "gitlab",
+  "bitbucket",
+  "codeberg",
+  "sourceforge",
+  "npmjs",
+  "huggingface",
+  "pages",
+  "workers",
+  "vercel",
+  "netlify",
+  "herokuapp",
+  "replit",
+  "glitch"
 ]);
-var MAX_HOST_READINGS = 3;
+var PATH_NOISE = /* @__PURE__ */ new Set([
+  "index",
+  "home",
+  "en",
+  "de",
+  "at",
+  "us",
+  "uk",
+  "p",
+  "page",
+  "pages",
+  "blog",
+  "post",
+  "posts",
+  "docs",
+  "doc",
+  "level",
+  "tag",
+  "tags",
+  "category",
+  "search",
+  "www",
+  "main",
+  "master"
+]);
+var URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
+var PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
+var MIN_NAME_LENGTH = 2;
+var MAX_URL_READINGS = 4;
 var isYear = (token) => {
   if (!YEAR_PATTERN.test(token)) return false;
   const value = Number.parseInt(token, 10);
   return value >= YEAR_MIN && value <= YEAR_MAX;
 };
+var stripScheme = (word) => word.replace(URL_SCHEME, "").replace(/[.,;:!?]+$/u, "");
 var hostLabels = (word) => {
-  const bare = word.replace(/^[a-z]+:\/\//u, "").replace(/[.,;:!?]+$/u, "");
+  const bare = stripScheme(word);
   if (!HOST_PATTERN.test(bare)) return [];
   const labels = bare.split("/")[0]?.split(".") ?? [];
   if (!TLDS.has(labels.at(-1) ?? "")) return [];
   return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
 };
+var pathNames = (word) => {
+  const bare = stripScheme(word);
+  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare)) return [];
+  return bare.split("/").slice(1).map((segment) => (segment.split("?")[0] ?? "").replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && !/^\d+$/u.test(segment) && !PATH_NOISE.has(segment)).reverse();
+};
+var urlNames = (word) => [...pathNames(word), ...hostLabels(word)];
 var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
-var hostReadings = (query) => {
-  const labels = query.tokens.map(hostLabels);
-  const depth = Math.min(MAX_HOST_READINGS, Math.max(0, ...labels.map((list) => list.length)));
+var urlReadings = (query) => {
+  const names = query.tokens.map(urlNames);
+  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings2 = [];
   for (let level = 0; level < depth; level += 1) {
     const tokens = query.tokens.map((token, index) => {
-      const list = labels[index] ?? [];
+      const list = names[index] ?? [];
       return list[Math.min(level, list.length - 1)] ?? token;
     });
     const known = [query, ...readings2];
@@ -1592,7 +1690,7 @@ var decide = (ranked) => {
   }
   return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
-var readings = (query) => [query, ...hostReadings(query)];
+var readings = (query) => [query, ...urlReadings(query)];
 var looseCandidates = (query, input) => {
   const queries = readings(query);
   return buildCandidates(input).map((candidate) => ({
@@ -1616,13 +1714,13 @@ var resolveReading = (query, input) => {
 var resolveQuery = (query, input) => {
   const literal = resolveReading(query, input);
   if (literal.kind !== "unsure") return literal;
-  let best = literal;
+  let unsure = literal;
   for (const reading of readings(query).slice(1)) {
-    const host = resolveReading(reading, input);
-    if (host.kind !== "unsure") return host;
-    if (best.candidates.length === 0) best = host;
+    const decision = resolveReading(reading, input);
+    if (decision.kind !== "unsure") return decision;
+    if (unsure.candidates.length === 0) unsure = decision;
   }
-  return best;
+  return unsure;
 };
 
 // src/match/completion.ts
@@ -1702,7 +1800,7 @@ var completeRootNames = (args, config) => {
 
 // src/commands/complete.ts
 var COMPLETION_LIMIT = 20;
-var MILLIS_PER_SECOND = 1e3;
+var MILLIS_PER_SECOND2 = 1e3;
 var CLI_CONTROL_SET = new Set(CLI_CONTROLS);
 var FUZZY_LIMIT = 5;
 var VALIDATION_ATTEMPT_LIMIT = 512;
@@ -1756,7 +1854,7 @@ var completeQuery = (args, input) => {
   return safelyMerge(args, values).slice(0, COMPLETION_LIMIT);
 };
 var runComplete = (args) => {
-  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
+  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
   const config = loadConfig();
   const roots = completeRootNames(args, config);
   const aliases = loadAliases().aliases.filter((alias) => isDirectory(alias.path));
@@ -1777,7 +1875,7 @@ import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync10 } from "node:fs";
 var ZOXIDE = "zoxide";
 var ZOXIDE_ARGS = ["query", "--list", "--score"];
-var MILLIS_PER_SECOND2 = 1e3;
+var MILLIS_PER_SECOND3 = 1e3;
 var MIN_VISITS = 1;
 var parseZoxideList = (stdout, nowSeconds) => {
   const records = [];
@@ -1805,7 +1903,7 @@ var runImportZoxide = () => {
     fail(`zoxide exited with ${String(result.status)}`, result.stderr.trim());
     return EXIT.error;
   }
-  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
+  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND3);
   const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync10(r.path));
   updateDb((db) => {
     const byPath = new Map(db.records.map((record) => [record.path, record]));
@@ -2106,7 +2204,7 @@ var buildAiRequest = (input) => {
 };
 
 // src/commands/query.ts
-var MILLIS_PER_SECOND3 = 1e3;
+var MILLIS_PER_SECOND4 = 1e3;
 var suggest = (ranked, raw) => {
   fail(`no match for "${raw}"`);
   const guesses = ranked.slice(0, LIMIT.suggestions);
@@ -2136,7 +2234,7 @@ var jumpExisting = (path) => {
 var recalledAlias = (context) => {
   const alias = findAlias(context.query.raw);
   if (alias === void 0) return null;
-  const trusted = context.config.roots.some((root) => isUnder(alias.path, root.path));
+  const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
   forgetAlias(context.query.raw);
   return null;
@@ -2226,7 +2324,7 @@ var runQuery = async (args) => {
   if (search === null) return EXIT.error;
   const { query, config } = search;
   const db = ingest();
-  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND3);
+  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND4);
   const initial = freshIndex(config);
   let refreshed = initial.refreshed;
   let input = { index: initial.index, db, cwd: process.cwd(), nowSeconds };
@@ -2617,7 +2715,7 @@ var managementCompleter = () => `if [ "$COMP_CWORD" -ge 2 ]; then
       esac
       return ;;
     index) COMPREPLY=( $(compgen -W '--refresh --help' -- "$current") ); return ;;
-    alias) COMPREPLY=( $(compgen -W 'list forget --help' -- "$current") ); return ;;
+    alias) COMPREPLY=( $(compgen -W 'list add forget --help' -- "$current") ); return ;;
     init) COMPREPLY=( $(compgen -W 'zsh bash fish --help' -- "$current") ); return ;;
     import) COMPREPLY=( $(compgen -W 'zoxide --help' -- "$current") ); return ;;
     doctor) COMPREPLY=( $(compgen -W '--help' -- "$current") ); return ;;
@@ -2839,7 +2937,7 @@ switch $argv[1]
         printf '%s\\n' --refresh --help
         return 0
     case alias
-        printf '%s\\n' list forget --help
+        printf '%s\\n' list add forget --help
         return 0
     case init
         printf '%s\\n' zsh bash fish --help
@@ -2998,7 +3096,7 @@ var completer3 = () => `__cdai_complete() {
     case "\${words[2]}" in
       setup) _values 'setup option' --yes --ai --no-ai '--root[path]:directory:_directories' '--remove-root[path]:directory:_directories' '--depth[depth]:depth:' --help; return ;;
       index) _values 'index option' --refresh --help; return ;;
-      alias) _values 'alias command' list forget --help; return ;;
+      alias) _values 'alias command' list add forget --help; return ;;
       init) _values 'shell' zsh bash fish --help; return ;;
       import) _values 'source' zoxide --help; return ;;
       doctor) _values 'doctor option' --help; return ;;
@@ -3045,7 +3143,7 @@ ${completer3()}
 // package.json
 var package_default = {
   name: "cdai",
-  version: "0.3.8",
+  version: "0.3.9",
   description: "cd with intent. Deterministic frecency + fuzzy matching first, AI only when it helps.",
   type: "module",
   bin: {
@@ -3110,7 +3208,8 @@ var USAGE = [
   "                            configure roots and optional AI fallback",
   "  cdai index [--refresh]    show or rebuild the directory index",
   "  cdai import zoxide        seed frecency from an existing zoxide database",
-  "  cdai alias <list|forget>  inspect or correct confirmed local intent",
+  "  cdai alias <list|add|forget>",
+  "                            inspect, teach or correct confirmed local intent",
   "  cdai doctor               show what cdai sees on this machine",
   "  cdai --version",
   "",

@@ -117,7 +117,7 @@ switch $argv[1]
         printf '%s\\n' --refresh --help
         return 0
     case alias
-        printf '%s\\n' list forget --help
+        printf '%s\\n' list add forget --help
         return 0
     case init
         printf '%s\\n' zsh bash fish --help

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join, isAbsolute, resolve, sep } from 'node:path';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 
 const APP_NAME = 'cdai';
 const TMP_SUFFIX = '.tmp';
@@ -87,6 +87,22 @@ export const isUnder = (child: string, parent: string): boolean => {
   const c = resolve(child);
   const p = resolve(parent);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
+};
+
+/**
+ * Same question as `isUnder`, but symlink-tolerant: a configured root and the path the user
+ * navigated by are routinely two spellings of one place (/tmp -> /private/tmp), and a remembered
+ * directory must not fall out of its root over spelling alone.
+ */
+export const isUnderRoot = (child: string, root: string): boolean =>
+  isUnder(child, root) || isUnder(realPathOr(child), realPathOr(root));
+
+const realPathOr = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 };
 
 /** The only question that matters about a matched path: can the shell cd into it? */

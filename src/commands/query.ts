@@ -12,7 +12,7 @@ import {
   fileUrlPath,
   isDirectory,
   isProtocolSafePath,
-  isUnder,
+  isUnderRoot,
 } from '../paths.js';
 import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
@@ -62,7 +62,7 @@ const jumpExisting = (path: string): ExitCode => {
 const recalledAlias = (context: QueryContext): ExitCode | null => {
   const alias = findAlias(context.query.raw);
   if (alias === undefined) return null;
-  const trusted = context.config.roots.some((root) => isUnder(alias.path, root.path));
+  const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
   forgetAlias(context.query.raw);
   return null;

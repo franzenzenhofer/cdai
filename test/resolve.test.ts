@@ -81,6 +81,18 @@ describe('resolveQuery', () => {
     expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.projects}/arcade/tidewheel`);
   });
 
+  it('reads a repository URL by its path, because no project is called github', () => {
+    const decision = run('https://github.com/octocat/tidewheel');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.projects}/arcade/tidewheel`);
+  });
+
+  it('falls back to the host when the path names nothing here', () => {
+    const decision = run('https://www.petalworks.at/leistungen/');
+    expect(decision.kind).toBe('hit');
+    expect(decision.kind === 'hit' && decision.path).toBe(`${fixture.clients}/petalworks`);
+  });
+
   it('offers a picker when two different places match', () => {
     const decision = run('tabletop');
     expect(decision.kind).toBe('choose');

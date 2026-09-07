@@ -97,7 +97,7 @@ const completer = (): string => `__cdai_complete() {
     case "\${words[2]}" in
       setup) _values 'setup option' --yes --ai --no-ai '--root[path]:directory:_directories' '--remove-root[path]:directory:_directories' '--depth[depth]:depth:' --help; return ;;
       index) _values 'index option' --refresh --help; return ;;
-      alias) _values 'alias command' list forget --help; return ;;
+      alias) _values 'alias command' list add forget --help; return ;;
       init) _values 'shell' zsh bash fish --help; return ;;
       import) _values 'source' zoxide --help; return ;;
       doctor) _values 'doctor option' --help; return ;;

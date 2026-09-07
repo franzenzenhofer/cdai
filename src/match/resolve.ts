@@ -7,7 +7,7 @@ import {
   type ScoreContext,
   type ScoredCandidate,
 } from './score.js';
-import { hostReadings, type ParsedQuery } from './tokenize.js';
+import { urlReadings, type ParsedQuery } from './tokenize.js';
 import type { DirIndex } from '../store/indexer.js';
 import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
@@ -140,8 +140,8 @@ export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
   return { kind: 'unsure', candidates: ranked.slice(0, LIMIT.aiFuzzy) };
 };
 
-/** Every reading of the query, best understood first: what was typed, then hosts as names. */
-const readings = (query: ParsedQuery): ParsedQuery[] => [query, ...hostReadings(query)];
+/** Every reading of the query, best understood first: what was typed, then URLs as names. */
+const readings = (query: ParsedQuery): ParsedQuery[] => [query, ...urlReadings(query)];
 
 /** Best guesses for the AI tier when the strict matcher came back empty handed. */
 export const looseCandidates = (query: ParsedQuery, input: ResolveInput): ScoredCandidate[] => {
@@ -174,17 +174,17 @@ const resolveReading = (query: ParsedQuery, input: ResolveInput): Decision => {
 
 /**
  * A literal directory name always outranks a derived one. A folder can literally be called
- * "nordwind.at", so the typed word decides first and the host readings only speak when nothing
- * answered at all, the most specific label first.
+ * "nordwind.at", so the typed word decides first and the derived readings only speak when
+ * nothing answered at all, the most specific name first.
  */
 export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision => {
   const literal = resolveReading(query, input);
   if (literal.kind !== 'unsure') return literal;
-  let best = literal;
+  let unsure = literal;
   for (const reading of readings(query).slice(1)) {
-    const host = resolveReading(reading, input);
-    if (host.kind !== 'unsure') return host;
-    if (best.candidates.length === 0) best = host;
+    const decision = resolveReading(reading, input);
+    if (decision.kind !== 'unsure') return decision;
+    if (unsure.candidates.length === 0) unsure = decision;
   }
-  return best;
+  return unsure;
 };

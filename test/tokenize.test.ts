@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  hostLabel,
   hostLabels,
-  hostReadings,
   isYear,
+  pathNames,
   tokenize,
   tokenizeArgs,
+  urlReadings,
 } from '../src/match/tokenize.js';
 
 describe('tokenize', () => {
@@ -16,17 +16,17 @@ describe('tokenize', () => {
   });
 
   it('searches a host by its name, not by its decoration', () => {
-    expect(hostLabel('lumenlab.com')).toBe('lumenlab');
-    expect(hostLabel('www.lumenlab.com')).toBe('lumenlab');
-    expect(hostLabel('https://www.lumenlab.com/blog')).toBe('lumenlab');
-    expect(hostLabel('shop.petalworks.at')).toBe('petalworks');
-    expect(hostLabel('petalworks.co.uk')).toBe('petalworks');
+    expect(hostLabels('lumenlab.com')).toEqual(['lumenlab']);
+    expect(hostLabels('www.lumenlab.com')).toEqual(['lumenlab']);
+    expect(hostLabels('https://www.lumenlab.com/blog')).toEqual(['lumenlab']);
+    expect(hostLabels('shop.petalworks.at')).toEqual(['petalworks']);
+    expect(hostLabels('petalworks.co.uk')).toEqual(['petalworks']);
   });
 
   it('leaves a dotted word that is not a host alone', () => {
-    expect(hostLabel('node.js')).toBe('node.js');
-    expect(hostLabel('vite.config')).toBe('vite.config');
-    expect(hostLabel('.config')).toBe('.config');
+    expect(hostLabels('node.js')).toEqual([]);
+    expect(hostLabels('vite.config')).toEqual([]);
+    expect(hostLabels('.config')).toEqual([]);
   });
 
   it('keeps the typed word, because a directory can be named after the whole host', () => {
@@ -37,20 +37,35 @@ describe('tokenize', () => {
   it('reads a subdomain as its own name, and the domain as the next one', () => {
     expect(hostLabels('tidewheel.orbit.dev')).toEqual(['tidewheel', 'orbit']);
     expect(hostLabels('https://tidewheel.orbit.dev/level/7')).toEqual(['tidewheel', 'orbit']);
-    expect(hostLabels('www.lumenlab.com')).toEqual(['lumenlab']);
+    expect(hostLabels('https://github.com/octocat/tidewheel')).toEqual([]);
+    expect(hostLabels('tidewheel.pages.dev')).toEqual(['tidewheel']);
     expect(hostLabels('amt.wien.gv.at')).toEqual(['amt', 'wien']);
     expect(hostLabels('node.js')).toEqual([]);
   });
 
-  it('offers the host readings as later attempts, never as a replacement', () => {
-    expect(hostReadings(tokenize('lumenlab.com website')).map((r) => r.tokens))
-      .toEqual([['lumenlab', 'website']]);
-    expect(hostReadings(tokenize('the website of www.lumenlab.com')).map((r) => r.tokens))
-      .toEqual([['website', 'lumenlab']]);
-    expect(hostReadings(tokenize('https://tidewheel.orbit.dev/ game')).map((r) => r.tokens))
+  it('reads the names a URL carries in its path, deepest first', () => {
+    expect(pathNames('https://github.com/octocat/tidewheel')).toEqual(['tidewheel', 'octocat']);
+    expect(pathNames('https://orbit.dev/blog/2026/07/tidewheel-ships.html'))
+      .toEqual(['tidewheel-ships']);
+    expect(pathNames('https:///stuff')).toEqual(['stuff']);
+    expect(pathNames('orbit.dev')).toEqual([]);
+    expect(pathNames('src/components')).toEqual([]);
+  });
+
+  it('offers the URL readings as later attempts, never as a replacement', () => {
+    const readings = (input: string): string[][] =>
+      urlReadings(tokenize(input)).map((reading) => [...reading.tokens]);
+    expect(readings('lumenlab.com website')).toEqual([['lumenlab', 'website']]);
+    expect(readings('the website of www.lumenlab.com')).toEqual([['website', 'lumenlab']]);
+    expect(readings('https://tidewheel.orbit.dev/ game'))
       .toEqual([['tidewheel', 'game'], ['orbit', 'game']]);
-    expect(hostReadings(tokenize('petalworks 2025'))).toEqual([]);
-    expect(hostReadings(tokenize('node.js'))).toEqual([]);
+    // What the link points at comes before what hosts it.
+    expect(readings('https://orbit.dev/tidewheel')).toEqual([['tidewheel'], ['orbit']]);
+    // Nobody's project is called "github", so the link is named by its path.
+    expect(readings('https://github.com/octocat/tidewheel'))
+      .toEqual([['tidewheel'], ['octocat']]);
+    expect(readings('petalworks 2025')).toEqual([]);
+    expect(readings('node.js')).toEqual([]);
   });
 
   it('preserves stopwords when they are the only possible directory name', () => {
