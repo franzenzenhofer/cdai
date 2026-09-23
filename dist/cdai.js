@@ -1363,7 +1363,7 @@ var runDoctor = (args = []) => {
 };
 
 // src/match/resolve.ts
-import { basename as basename4, dirname as dirname2 } from "node:path";
+import { basename as basename4 } from "node:path";
 
 // src/match/constants.ts
 var SCORE = {
@@ -1448,26 +1448,33 @@ var IN_OPERATOR = "in";
 var YEAR_MIN = 1990;
 var YEAR_MAX = 2999;
 
-// src/match/score.ts
-var SEGMENT_SPLIT = /[^a-z0-9]+/;
+// node_modules/@franzenzenhofer/intent-core/dist/match/score.js
+var SEGMENT_SPLIT = /[^a-z0-9]+/u;
 var LOG_BASE_2 = Math.LN2;
-var fuzzyScore = (token, name) => {
-  if (token === "" || name === "") return SCORE.none;
+var TYPO_ONE_EDIT_PENALTY = 40;
+var TYPO_TWO_EDIT_PENALTY = 80;
+var LONG_TOKEN = 8;
+var fuzzyScore = (token, name, options) => {
+  const { weights, fuzzy } = options;
+  if (token === "" || name === "")
+    return weights.none;
   let first = -1;
   let last = -1;
   let cursor = 0;
   for (let i = 0; i < name.length && cursor < token.length; i += 1) {
-    if (name[i] !== token[cursor]) continue;
-    if (first === -1) first = i;
+    if (name[i] !== token[cursor])
+      continue;
+    if (first === -1)
+      first = i;
     last = i;
     cursor += 1;
   }
-  if (cursor < token.length) return SCORE.none;
-  const span = last - first + 1;
-  const density = token.length / span;
+  if (cursor < token.length)
+    return weights.none;
+  const density = token.length / (last - first + 1);
   const coverage = token.length / name.length;
-  const share = FUZZY.baseShare + FUZZY.densityShare * density + FUZZY.coverageShare * coverage;
-  return Math.round(SCORE.fuzzyMax * share);
+  const share = fuzzy.baseShare + fuzzy.densityShare * density + fuzzy.coverageShare * coverage;
+  return Math.round(weights.fuzzyMax * share);
 };
 var withinEdits = (input, row, column, left) => {
   while (row < input.token.length && column < input.nameLength && input.token[row] === input.name[column]) {
@@ -1476,46 +1483,169 @@ var withinEdits = (input, row, column, left) => {
   }
   const tokenLeft = input.token.length - row;
   const nameLeft = input.nameLength - column;
-  if (tokenLeft === 0 || nameLeft === 0) return Math.max(tokenLeft, nameLeft) <= left;
-  if (left === 0 || Math.abs(tokenLeft - nameLeft) > left) return false;
-  if (row + 1 < input.token.length && column + 1 < input.nameLength && input.token[row] === input.name[column + 1] && input.token[row + 1] === input.name[column] && withinEdits(input, row + 2, column + 2, left - 1)) return true;
+  if (tokenLeft === 0 || nameLeft === 0)
+    return Math.max(tokenLeft, nameLeft) <= left;
+  if (left === 0 || Math.abs(tokenLeft - nameLeft) > left)
+    return false;
+  if (row + 1 < input.token.length && column + 1 < input.nameLength && input.token[row] === input.name[column + 1] && input.token[row + 1] === input.name[column] && withinEdits(input, row + 2, column + 2, left - 1))
+    return true;
   return withinEdits(input, row + 1, column + 1, left - 1) || withinEdits(input, row + 1, column, left - 1) || withinEdits(input, row, column + 1, left - 1);
 };
 var hasPrefixWithin = (token, name, edits) => {
   const start = Math.max(1, token.length - edits);
   const end = Math.min(name.length, token.length + edits);
   for (let length = start; length <= end; length += 1) {
-    if (withinEdits({ token, name, nameLength: length }, 0, 0, edits)) return true;
+    if (withinEdits({ token, name, nameLength: length }, 0, 0, edits))
+      return true;
   }
   return false;
 };
-var typoScore = (token, name) => {
-  if (token.length < COMPLETION.minSmartLength || token.length > COMPLETION.maxTypoLength) return SCORE.none;
-  if (token[0] !== name[0]) return SCORE.none;
-  const allowance = token.length >= 8 ? 2 : 1;
-  if (hasPrefixWithin(token, name, 1)) return SCORE.fuzzyMax - 40;
-  return allowance === 2 && hasPrefixWithin(token, name, 2) ? SCORE.fuzzyMax - 80 : SCORE.none;
+var typoScore = (token, name, options) => {
+  const { weights, typo } = options;
+  if (token.length < typo.minLength || token.length > typo.maxLength)
+    return weights.none;
+  if (token[0] !== name[0])
+    return weights.none;
+  if (hasPrefixWithin(token, name, 1))
+    return weights.fuzzyMax - TYPO_ONE_EDIT_PENALTY;
+  if (token.length < LONG_TOKEN)
+    return weights.none;
+  return hasPrefixWithin(token, name, 2) ? weights.fuzzyMax - TYPO_TWO_EDIT_PENALTY : weights.none;
 };
 var hasBoundaryHit = (token, name) => name.split(SEGMENT_SPLIT).some((segment) => segment !== "" && segment.startsWith(token));
-var matchName = (token, name) => {
+var matchName = (token, name, options) => {
+  const { weights } = options;
   const lower = name.toLowerCase();
-  if (lower === token) return SCORE.exact;
-  if (lower.startsWith(token)) return SCORE.prefix;
-  if (hasBoundaryHit(token, lower)) return SCORE.wordBoundary;
-  if (lower.includes(token)) return SCORE.substring;
-  const fuzzy = fuzzyScore(token, lower);
-  return fuzzy > SCORE.none ? fuzzy : typoScore(token, lower);
+  if (lower === token)
+    return weights.exact;
+  if (lower.startsWith(token))
+    return weights.prefix;
+  if (hasBoundaryHit(token, lower))
+    return weights.wordBoundary;
+  if (lower.includes(token))
+    return weights.substring;
+  const fuzzy = fuzzyScore(token, lower, options);
+  return fuzzy > weights.none ? fuzzy : typoScore(token, lower, options);
 };
+var frecencyBonus = (frecency2, weight) => frecency2 <= 0 ? 0 : weight * (Math.log1p(frecency2) / LOG_BASE_2);
+var looseScore = (tokens, name, options) => {
+  const lower = name.toLowerCase();
+  let best = options.weights.none;
+  for (const token of tokens) {
+    const forward = fuzzyScore(token, lower, options);
+    const shrink = token.length === 0 ? 0 : Math.min(1, lower.length / token.length);
+    const backward = fuzzyScore(lower, token, options) * shrink;
+    best = Math.max(best, forward, backward);
+  }
+  return Math.round(best);
+};
+
+// node_modules/@franzenzenhofer/intent-core/dist/match/path-trie.js
+var node = () => ({ terminal: false, children: /* @__PURE__ */ new Map() });
+var segments = (path) => path.split("/").filter((part) => part !== "");
+var PathChainSet = class {
+  #root = node();
+  hasChain(path) {
+    let current2 = this.#root;
+    for (const part of segments(path)) {
+      if (current2.terminal)
+        return true;
+      const next = current2.children.get(part);
+      if (next === void 0)
+        return false;
+      current2 = next;
+    }
+    return current2.terminal || current2.children.size > 0;
+  }
+  add(path) {
+    let current2 = this.#root;
+    for (const part of segments(path)) {
+      let next = current2.children.get(part);
+      if (next === void 0) {
+        next = node();
+        current2.children.set(part, next);
+      }
+      current2 = next;
+    }
+    current2.terminal = true;
+  }
+};
+
+// node_modules/@franzenzenhofer/intent-core/dist/match/decide.js
+var rank = (items, evaluate, tieBreak) => {
+  const scored = [];
+  for (const item of items) {
+    const result = evaluate(item);
+    if (result !== null && result.score > 0)
+      scored.push({ item, ...result });
+  }
+  return scored.sort((a, b) => b.quality - a.quality || b.score - a.score || tieBreak(a.item, b.item));
+};
+var decide = (ranked, thresholds) => {
+  const best = ranked[0];
+  if (best === void 0)
+    return { kind: "unsure", candidates: [] };
+  const runnerUp = ranked[1];
+  const gap = best.quality === (runnerUp?.quality ?? 0) ? best.score - (runnerUp?.score ?? 0) : best.quality - (runnerUp?.quality ?? 0);
+  if (best.quality >= thresholds.hit && gap >= thresholds.gap) {
+    return { kind: "hit", item: best.item, score: best.score };
+  }
+  const shortlist = ranked.filter((scored) => scored.quality >= thresholds.candidate).slice(0, thresholds.picker);
+  if (shortlist.length >= thresholds.minPickerCandidates) {
+    return { kind: "choose", candidates: shortlist };
+  }
+  if (shortlist.length === 1 && best.quality >= thresholds.hit) {
+    return { kind: "hit", item: best.item, score: best.score };
+  }
+  return { kind: "unsure", candidates: ranked.slice(0, thresholds.unsure) };
+};
+var collapseChains = (ranked, pathOf2) => {
+  const kept = [];
+  const paths = new PathChainSet();
+  for (const scored of ranked) {
+    const path = pathOf2(scored.item);
+    if (paths.hasChain(path))
+      continue;
+    kept.push(scored);
+    paths.add(path);
+  }
+  return kept;
+};
+var parentOf = (path) => {
+  const idx = path.lastIndexOf("/");
+  return idx <= 0 ? "" : path.slice(0, idx);
+};
+var dropDescendants = (ranked, pathOf2) => {
+  const paths = new Set(ranked.map((scored) => pathOf2(scored.item)));
+  return ranked.filter((scored) => {
+    let parent = parentOf(pathOf2(scored.item));
+    while (parent.length > 1) {
+      if (paths.has(parent))
+        return false;
+      parent = parentOf(parent);
+    }
+    return true;
+  });
+};
+
+// src/match/score.ts
+var MATCH = {
+  weights: SCORE,
+  fuzzy: FUZZY,
+  typo: { minLength: COMPLETION.minSmartLength, maxLength: COMPLETION.maxTypoLength }
+};
+var fuzzyScore2 = (token, name) => fuzzyScore(token, name, MATCH);
+var matchName2 = (token, name) => matchName(token, name, MATCH);
+var frecencyBonus2 = (frecency2) => frecencyBonus(frecency2, BONUS.frecency);
 var parentPath = (path) => {
   const idx = path.lastIndexOf("/");
   return idx <= 0 ? "" : path.slice(0, idx);
 };
 var tokenScore = (token, candidate) => {
-  const nameScore = matchName(token, candidate.name);
+  const nameScore = matchName2(token, candidate.name);
   if (nameScore > SCORE.none) return nameScore;
   return parentPath(candidate.path).toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
 };
-var frecencyBonus = (frecency2) => frecency2 <= 0 ? 0 : BONUS.frecency * (Math.log1p(frecency2) / LOG_BASE_2);
 var brevityBonus = (query, candidate) => {
   const queried = query.tokens.reduce((sum, token) => sum + token.length, 0);
   if (queried === 0 || candidate.name.length === 0) return 0;
@@ -1542,27 +1672,39 @@ var matchQuality = (query, candidate) => {
 var contextualScore = (query, candidate, context, quality) => {
   const frecency2 = context.frecencyByPath.get(candidate.realPath ?? candidate.path) ?? 0;
   const underCwd = candidate.path !== context.cwd && candidate.path.startsWith(`${context.cwd}/`) ? BONUS.underCwd : 0;
-  return quality + frecencyBonus(frecency2) + underCwd + brevityBonus(query, candidate);
+  return quality + frecencyBonus2(frecency2) + underCwd + brevityBonus(query, candidate);
 };
-var looseScore = (query, candidate) => {
-  const name = candidate.name.toLowerCase();
-  let best = SCORE.none;
-  for (const token of query.tokens) {
-    const forward = fuzzyScore(token, name);
-    const shrink = token.length === 0 ? 0 : Math.min(1, name.length / token.length);
-    const backward = fuzzyScore(name, token) * shrink;
-    best = Math.max(best, forward, backward);
-  }
-  return Math.round(best);
-};
-var rankCandidates = (query, candidates, context) => candidates.map((candidate) => {
-  const quality = matchQuality(query, candidate);
-  return { candidate, quality, score: quality === SCORE.none ? SCORE.none : contextualScore(query, candidate, context, quality) };
-}).filter((scored) => scored.score > SCORE.none).sort((a, b) => b.quality - a.quality || b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
+var looseScore2 = (query, candidate) => looseScore(query.tokens, candidate.name, MATCH);
+var rankCandidates = (query, candidates, context) => rank(
+  candidates,
+  (candidate) => {
+    const quality = matchQuality(query, candidate);
+    if (quality === SCORE.none) return null;
+    return { quality, score: contextualScore(query, candidate, context, quality) };
+  },
+  (a, b) => a.path.localeCompare(b.path)
+).map((scored) => ({
+  candidate: scored.item,
+  quality: scored.quality,
+  score: scored.score
+}));
 
-// src/match/tokenize.ts
-var YEAR_PATTERN = /^\d{4}$/;
-var HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/;
+// node_modules/@franzenzenhofer/intent-core/dist/match/words.js
+var YEAR_PATTERN = /^\d{4}$/u;
+var splitWords = (input) => input.toLowerCase().split(/\s+/u).filter((word) => word !== "");
+var isYear = (token, range) => {
+  if (!YEAR_PATTERN.test(token))
+    return false;
+  const value = Number.parseInt(token, 10);
+  return value >= range.min && value <= range.max;
+};
+var dropStopwords = (words, stopwords) => {
+  const kept = words.filter((word) => !stopwords.has(word));
+  return kept.length > 0 ? kept : [...words];
+};
+
+// node_modules/@franzenzenhofer/intent-core/dist/match/url.js
+var HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/u;
 var TLDS = /* @__PURE__ */ new Set([
   "com",
   "net",
@@ -1671,61 +1813,70 @@ var PATH_DOTS = /* @__PURE__ */ new Set(["", ".", "..", "~"]);
 var PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
 var MIN_NAME_LENGTH = 2;
 var MAX_URL_READINGS = 4;
-var isYear = (token) => {
-  if (!YEAR_PATTERN.test(token)) return false;
-  const value = Number.parseInt(token, 10);
-  return value >= YEAR_MIN && value <= YEAR_MAX;
-};
 var stripScheme = (word) => word.replace(URL_SCHEME, "").replace(/[.,;:!?]+$/u, "");
 var hostLabels = (word) => {
   const bare = stripScheme(word);
-  if (!HOST_PATTERN.test(bare)) return [];
+  if (!HOST_PATTERN.test(bare))
+    return [];
   const labels = bare.split("/")[0]?.split(".") ?? [];
-  if (!TLDS.has(labels.at(-1) ?? "")) return [];
+  if (!TLDS.has(labels.at(-1) ?? ""))
+    return [];
   return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
 };
 var pathNames = (word) => {
   const bare = stripScheme(word);
-  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare)) return [];
+  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare))
+    return [];
   return bare.split("/").slice(1).map((segment) => (segment.split("?")[0] ?? "").replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && !/^\d+$/u.test(segment) && !PATH_NOISE.has(segment)).reverse();
 };
 var localNames = (word) => {
-  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word)) return [];
+  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word))
+    return [];
   return word.split("/").map((segment) => segment.replace(PAGE_SUFFIX, "")).filter((segment) => !PATH_DOTS.has(segment)).reverse();
 };
 var urlNames = (word) => [...pathNames(word), ...hostLabels(word)];
-var pathReading = (query) => {
-  const tokens = [];
-  const within = [...query.within];
+var pathReading = (tokens) => {
+  const read = [];
+  const within = [];
   let spelled = false;
-  for (const token of query.tokens) {
+  for (const token of tokens) {
     const [deepest, ...above] = localNames(token);
     if (deepest === void 0) {
-      tokens.push(token);
+      read.push(token);
       continue;
     }
     spelled = true;
-    tokens.push(deepest);
+    read.push(deepest);
     within.push(...above);
   }
-  return spelled ? { ...query, tokens, within } : null;
+  return spelled ? { tokens: read, within } : null;
 };
-var splitWords = (input) => input.toLowerCase().split(/\s+/).filter((word) => word !== "");
-var urlReadings = (query) => {
-  const names = query.tokens.map(urlNames);
+var urlReadings = (tokens) => {
+  const names = tokens.map(urlNames);
   const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
   const readings2 = [];
   for (let level = 0; level < depth; level += 1) {
-    const tokens = query.tokens.map((token, index) => {
+    const read = tokens.map((token, index) => {
       const list = names[index] ?? [];
       return list[Math.min(level, list.length - 1)] ?? token;
     });
-    const known = [query, ...readings2];
-    if (known.some((seen) => seen.tokens.every((token, index) => token === tokens[index]))) continue;
-    readings2.push({ ...query, tokens });
+    const known = [tokens, ...readings2];
+    if (known.some((seen) => seen.every((token, index) => token === read[index])))
+      continue;
+    readings2.push(read);
   }
   return readings2;
 };
+
+// src/match/tokenize.ts
+var YEARS = { min: YEAR_MIN, max: YEAR_MAX };
+var isYear2 = (token) => isYear(token, YEARS);
+var pathReading2 = (query) => {
+  const read = pathReading(query.tokens);
+  if (read === null) return null;
+  return { ...query, tokens: [...read.tokens], within: [...query.within, ...read.within] };
+};
+var urlReadings2 = (query) => urlReadings(query.tokens).map((tokens) => ({ ...query, tokens }));
 var takeRootFilter = (words) => {
   const rest = [];
   let rootFilter = null;
@@ -1762,10 +1913,9 @@ var tokenize = (input) => {
   const words = splitWords(input);
   const { rest: afterIn, rootFilter } = takeRootFilter(words);
   const { rest: afterOrder, order } = takeOrder(afterIn);
-  const years = afterOrder.filter(isYear);
-  const searchable = afterOrder.filter((word) => !isYear(word));
-  const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
-  const tokens = meaningful.length > 0 ? meaningful : searchable;
+  const years = afterOrder.filter(isYear2);
+  const searchable = afterOrder.filter((word) => !isYear2(word));
+  const tokens = dropStopwords(searchable, STOPWORDS);
   if (tokens.length === 0 && words.length > 0) {
     return { raw: input, tokens: words, order: "none", years: [], rootFilter: null, within: [] };
   }
@@ -1773,38 +1923,15 @@ var tokenize = (input) => {
 };
 var tokenizeArgs = (args) => tokenize(args.join(" "));
 
-// node_modules/@franzenzenhofer/intent-core/dist/match/path-trie.js
-var node = () => ({ terminal: false, children: /* @__PURE__ */ new Map() });
-var segments = (path) => path.split("/").filter((part) => part !== "");
-var PathChainSet = class {
-  #root = node();
-  hasChain(path) {
-    let current2 = this.#root;
-    for (const part of segments(path)) {
-      if (current2.terminal)
-        return true;
-      const next = current2.children.get(part);
-      if (next === void 0)
-        return false;
-      current2 = next;
-    }
-    return current2.terminal || current2.children.size > 0;
-  }
-  add(path) {
-    let current2 = this.#root;
-    for (const part of segments(path)) {
-      let next = current2.children.get(part);
-      if (next === void 0) {
-        next = node();
-        current2.children.set(part, next);
-      }
-      current2 = next;
-    }
-    current2.terminal = true;
-  }
-};
-
 // src/match/resolve.ts
+var THRESHOLDS = {
+  ...THRESHOLD,
+  picker: LIMIT.picker,
+  unsure: LIMIT.aiFuzzy
+};
+var asScored = (ranked) => ({ item: ranked.candidate, quality: ranked.quality ?? ranked.score, score: ranked.score });
+var asCandidate = (scored) => ({ candidate: scored.item, quality: scored.quality, score: scored.score });
+var pathOf = (candidate) => candidate.path;
 var frecencyMap = (db, nowSeconds) => new Map(db.records.map((record) => [record.realPath ?? record.path, frecency(record, nowSeconds)]));
 var buildCandidates = (input) => {
   const byIdentity = /* @__PURE__ */ new Map();
@@ -1823,27 +1950,8 @@ var buildCandidates = (input) => {
   }
   return [...byIdentity.values()];
 };
-var collapseChains = (ranked) => {
-  const kept = [];
-  const paths = new PathChainSet();
-  for (const scored of ranked) {
-    if (paths.hasChain(scored.candidate.path)) continue;
-    kept.push(scored);
-    paths.add(scored.candidate.path);
-  }
-  return kept;
-};
-var dropDescendants = (ranked) => {
-  const paths = new Set(ranked.map((r) => r.candidate.path));
-  return ranked.filter((scored) => {
-    let parent = dirname2(scored.candidate.path);
-    while (parent.length > 1) {
-      if (paths.has(parent)) return false;
-      parent = dirname2(parent);
-    }
-    return true;
-  });
-};
+var collapseChains2 = (ranked) => collapseChains(ranked.map(asScored), pathOf).map(asCandidate);
+var dropDescendants2 = (ranked) => dropDescendants(ranked.map(asScored), pathOf).map(asCandidate);
 var pickByMtime = (candidates, newest) => [...candidates].sort((a, b) => newest ? b.mtime - a.mtime : a.mtime - b.mtime)[0];
 var orderPool = (ranked, index) => {
   const best = ranked[0];
@@ -1862,34 +1970,20 @@ var applyOrder = (query, ranked, index) => {
   if (chosen === void 0) return { kind: "unsure", candidates: ranked };
   return { kind: "hit", path: chosen.path, score: best.score };
 };
-var decide = (ranked) => {
-  const best = ranked[0];
-  if (best === void 0) return { kind: "unsure", candidates: [] };
-  const runnerUp = ranked[1];
-  const quality = best.quality ?? best.score;
-  const runnerQuality = runnerUp?.quality ?? runnerUp?.score ?? 0;
-  const gap = quality === runnerQuality ? best.score - (runnerUp?.score ?? 0) : quality - runnerQuality;
-  if (quality >= THRESHOLD.hit && gap >= THRESHOLD.gap) {
-    return { kind: "hit", path: best.candidate.path, score: best.score };
-  }
-  const shortlist = ranked.filter((r) => (r.quality ?? r.score) >= THRESHOLD.candidate).slice(0, LIMIT.picker);
-  if (shortlist.length >= THRESHOLD.minPickerCandidates) {
-    return { kind: "choose", candidates: shortlist };
-  }
-  if (shortlist.length === 1 && quality >= THRESHOLD.hit) {
-    return { kind: "hit", path: best.candidate.path, score: best.score };
-  }
-  return { kind: "unsure", candidates: ranked.slice(0, LIMIT.aiFuzzy) };
+var decide2 = (ranked) => {
+  const decision = decide(ranked.map(asScored), THRESHOLDS);
+  if (decision.kind === "hit") return { kind: "hit", path: decision.item.path, score: decision.score };
+  return { kind: decision.kind, candidates: decision.candidates.map(asCandidate) };
 };
 var readings = (query) => {
-  const spelled = pathReading(query);
-  return [query, ...spelled === null ? [] : [spelled], ...urlReadings(query)];
+  const spelled = pathReading2(query);
+  return [query, ...spelled === null ? [] : [spelled], ...urlReadings2(query)];
 };
 var looseCandidates = (query, input) => {
   const queries = readings(query);
   return buildCandidates(input).map((candidate) => ({
     candidate,
-    score: Math.max(...queries.map((reading) => looseScore(reading, candidate)))
+    score: Math.max(...queries.map((reading) => looseScore2(reading, candidate)))
   })).filter((scored) => scored.score > 0).sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path)).slice(0, LIMIT.aiFuzzy);
 };
 var resolveReading = (query, input) => {
@@ -1899,11 +1993,11 @@ var resolveReading = (query, input) => {
   };
   if (query.order !== "none") {
     const detached = { cwd: "", frecencyByPath: /* @__PURE__ */ new Map() };
-    const ordered = dropDescendants(rankCandidates(query, buildCandidates(input), detached));
+    const ordered = dropDescendants2(rankCandidates(query, buildCandidates(input), detached));
     if (ordered.length > 0) return applyOrder(query, ordered, input.index);
   }
-  const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
-  return decide(ranked);
+  const ranked = collapseChains2(rankCandidates(query, buildCandidates(input), context));
+  return decide2(ranked);
 };
 var resolveQuery = (query, input) => {
   const literal = resolveReading(query, input);
@@ -1923,11 +2017,11 @@ var smartNameMatch = (fragment, name) => {
   if (fragment === "") return void 0;
   const token = fragment.toLowerCase();
   const lower = name.toLowerCase();
-  const literal = matchName(token, lower);
+  const literal = matchName2(token, lower);
   if (literal >= SCORE.prefix) return { kind: "literal", strength: literal };
   if (token.length < COMPLETION.minSmartLength) return void 0;
   if (literal >= SCORE.substring) return { kind: "literal", strength: literal };
-  const compact = fuzzyScore(token, lower);
+  const compact = fuzzyScore2(token, lower);
   if (token[0] === lower[0] && compact > SCORE.none) return { kind: "compact", strength: compact };
   if (compact > SCORE.none) return void 0;
   return literal > SCORE.none ? { kind: "typo", strength: literal } : void 0;
@@ -2026,7 +2120,7 @@ var safeCandidates = (args, input) => {
   if (query.tokens.length === 0) return { candidates: [], nameCounts: /* @__PURE__ */ new Map() };
   const context = { cwd: input.cwd, frecencyByPath: frecencyMap(input.db, input.nowSeconds) };
   const active = words.at(-1)?.toLowerCase() ?? "";
-  const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
+  const ranked = collapseChains2(rankCandidates(query, buildCandidates(input), context));
   const activeMatches = STOPWORDS.has(active) ? [] : ranked.map((scored) => ({ ...scored, completion: smartNameMatch(active, scored.candidate.name) })).filter((item) => item.completion !== void 0);
   const matched = activeMatches.length > 0 ? activeMatches : ranked.map((scored) => ({ ...scored, completion: nameMatch(query.tokens, scored.candidate.name) })).filter((item) => item.completion !== void 0);
   const ordered = matched.filter(({ candidate }) => !hasUnsafeCompletionChar(candidate.name) && !hasUnsafeCompletionChar(candidate.path)).sort((a, b) => completionKindRank(b.completion.kind) - completionKindRank(a.completion.kind) || b.completion.strength - a.completion.strength || (b.quality ?? b.score) - (a.quality ?? a.score) || b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));

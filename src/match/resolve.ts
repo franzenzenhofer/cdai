@@ -1,4 +1,4 @@
-import { basename, dirname } from 'node:path';
+import { basename } from 'node:path';
 import { LIMIT, THRESHOLD } from './constants.js';
 import {
   looseScore,
@@ -12,7 +12,13 @@ import type { DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
 import { childrenOf } from '@franzenzenhofer/intent-core/store/indexer';
 import type { Db } from '../store/db.js';
 import { frecency } from '@franzenzenhofer/intent-core/store/frecency';
-import { PathChainSet } from '@franzenzenhofer/intent-core/match/path-trie';
+import {
+  collapseChains as coreCollapseChains,
+  decide as coreDecide,
+  dropDescendants as coreDropDescendants,
+  type DecideThresholds,
+  type Scored,
+} from '@franzenzenhofer/intent-core/match/decide';
 import { isDirectory } from '@franzenzenhofer/intent-core/paths';
 
 export interface ResolveInput {
@@ -26,6 +32,21 @@ export type Decision =
   | { readonly kind: 'hit'; readonly path: string; readonly score: number }
   | { readonly kind: 'choose'; readonly candidates: readonly ScoredCandidate[] }
   | { readonly kind: 'unsure'; readonly candidates: readonly ScoredCandidate[] };
+
+/** cdai's own thresholds, handed to the shared decision rule. */
+const THRESHOLDS: DecideThresholds = {
+  ...THRESHOLD,
+  picker: LIMIT.picker,
+  unsure: LIMIT.aiFuzzy,
+};
+
+const asScored = (ranked: ScoredCandidate): Scored<Candidate> =>
+  ({ item: ranked.candidate, quality: ranked.quality ?? ranked.score, score: ranked.score });
+
+const asCandidate = (scored: Scored<Candidate>): ScoredCandidate =>
+  ({ candidate: scored.item, quality: scored.quality, score: scored.score });
+
+const pathOf = (candidate: Candidate): string => candidate.path;
 
 export const frecencyMap = (db: Db, nowSeconds: number): Map<string, number> =>
   new Map(db.records.map((record) => [record.realPath ?? record.path, frecency(record, nowSeconds)]));
@@ -59,33 +80,16 @@ export const buildCandidates = (input: ResolveInput): Candidate[] => {
  * A directory and its own ancestor are the same place, not two answers. Iterating score first
  * keeps the better scoring member of each chain and stops the picker firing on nested hits.
  */
-export const collapseChains = (ranked: readonly ScoredCandidate[]): ScoredCandidate[] => {
-  const kept: ScoredCandidate[] = [];
-  const paths = new PathChainSet();
-  for (const scored of ranked) {
-    if (paths.hasChain(scored.candidate.path)) continue;
-    kept.push(scored);
-    paths.add(scored.candidate.path);
-  }
-  return kept;
-};
+export const collapseChains = (ranked: readonly ScoredCandidate[]): ScoredCandidate[] =>
+  coreCollapseChains(ranked.map(asScored), pathOf).map(asCandidate);
 
 /**
  * For ordered queries a candidate whose ancestor is also a contender is redundant: the
  * ancestor's children already represent it, and keeping it would pool its own children too
  * ("latest petalworks" must yield petalworks-2026, never dive into petalworks-2026's insides).
  */
-export const dropDescendants = (ranked: readonly ScoredCandidate[]): ScoredCandidate[] => {
-  const paths = new Set(ranked.map((r) => r.candidate.path));
-  return ranked.filter((scored) => {
-    let parent = dirname(scored.candidate.path);
-    while (parent.length > 1) {
-      if (paths.has(parent)) return false;
-      parent = dirname(parent);
-    }
-    return true;
-  });
-};
+export const dropDescendants = (ranked: readonly ScoredCandidate[]): ScoredCandidate[] =>
+  coreDropDescendants(ranked.map(asScored), pathOf).map(asCandidate);
 
 const pickByMtime = (candidates: readonly Candidate[], newest: boolean): Candidate | undefined =>
   [...candidates].sort((a, b) => (newest ? b.mtime - a.mtime : a.mtime - b.mtime))[0];
@@ -119,25 +123,9 @@ const applyOrder = (
 };
 
 export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
-  const best = ranked[0];
-  if (best === undefined) return { kind: 'unsure', candidates: [] };
-  const runnerUp = ranked[1];
-  const quality = best.quality ?? best.score;
-  const runnerQuality = runnerUp?.quality ?? runnerUp?.score ?? 0;
-  const gap = quality === runnerQuality
-    ? best.score - (runnerUp?.score ?? 0)
-    : quality - runnerQuality;
-  if (quality >= THRESHOLD.hit && gap >= THRESHOLD.gap) {
-    return { kind: 'hit', path: best.candidate.path, score: best.score };
-  }
-  const shortlist = ranked.filter((r) => (r.quality ?? r.score) >= THRESHOLD.candidate).slice(0, LIMIT.picker);
-  if (shortlist.length >= THRESHOLD.minPickerCandidates) {
-    return { kind: 'choose', candidates: shortlist };
-  }
-  if (shortlist.length === 1 && quality >= THRESHOLD.hit) {
-    return { kind: 'hit', path: best.candidate.path, score: best.score };
-  }
-  return { kind: 'unsure', candidates: ranked.slice(0, LIMIT.aiFuzzy) };
+  const decision = coreDecide(ranked.map(asScored), THRESHOLDS);
+  if (decision.kind === 'hit') return { kind: 'hit', path: decision.item.path, score: decision.score };
+  return { kind: decision.kind, candidates: decision.candidates.map(asCandidate) };
 };
 
 /**

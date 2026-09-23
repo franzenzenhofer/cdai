@@ -1,11 +1,15 @@
+import { dropStopwords, isYear as coreIsYear, splitWords } from '@franzenzenhofer/intent-core/match/words';
 import {
-  IN_OPERATOR,
-  LATEST_WORDS,
-  OLDEST_WORDS,
-  STOPWORDS,
-  YEAR_MAX,
-  YEAR_MIN,
-} from './constants.js';
+  pathReading as corePathReading, urlReadings as coreUrlReadings,
+} from '@franzenzenhofer/intent-core/match/url';
+import { IN_OPERATOR, LATEST_WORDS, OLDEST_WORDS, STOPWORDS, YEAR_MAX, YEAR_MIN } from './constants.js';
+
+export { hostLabels, localNames, pathNames, urlNames } from '@franzenzenhofer/intent-core/match/url';
+export { splitWords };
+
+const YEARS = { min: YEAR_MIN, max: YEAR_MAX } as const;
+
+export const isYear = (token: string): boolean => coreIsYear(token, YEARS);
 
 export type Order = 'latest' | 'oldest' | 'none';
 
@@ -22,136 +26,15 @@ export interface ParsedQuery {
   readonly within: readonly string[];
 }
 
-const YEAR_PATTERN = /^\d{4}$/;
-/** "www.lumenlab.com", "lumenlab.com/blog" - a host, optionally with a path tail. */
-const HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/;
 /**
- * Only real public suffixes turn a dotted word into a host, so "node.js" and "vite.config"
- * stay literal directory names.
- */
-const TLDS = new Set([
-  'com', 'net', 'org', 'info', 'biz', 'io', 'ai', 'dev', 'app', 'co', 'me', 'tv', 'xyz',
-  'cloud', 'site', 'online', 'shop', 'blog', 'at', 'de', 'ch', 'uk', 'eu', 'it', 'fr', 'es',
-  'nl', 'pl', 'cz', 'hu', 'si', 'sk', 'us', 'ca', 'au', 'nz', 'jp', 'cn', 'in', 'br',
-]);
-/**
- * Labels that decorate a host without naming it, in either the sub- or the second level. The
- * platforms belong here too: nobody's project is called "github" or "pages", so a link to one
- * is named by its path instead.
- */
-const HOST_NOISE = new Set([
-  'www', 'm', 'web', 'shop', 'blog', 'app', 'api', 'dev', 'staging', 'test', 'mail',
-  'co', 'com', 'net', 'org', 'gov', 'gv', 'edu', 'ac',
-  'github', 'gitlab', 'bitbucket', 'codeberg', 'sourceforge', 'npmjs', 'huggingface',
-  'pages', 'workers', 'vercel', 'netlify', 'herokuapp', 'replit', 'glitch',
-]);
-/** Path segments that number or decorate a page without naming the project behind it. */
-const PATH_NOISE = new Set([
-  'index', 'home', 'en', 'de', 'at', 'us', 'uk', 'p', 'page', 'pages', 'blog', 'post', 'posts',
-  'docs', 'doc', 'level', 'tag', 'tags', 'category', 'search', 'www', 'main', 'master',
-]);
-const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
-/** A word spelled as a location on this machine rather than as a name. */
-const LOCAL_PATH = /^~|\//u;
-const PATH_DOTS = new Set(['', '.', '..', '~']);
-const PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
-const MIN_NAME_LENGTH = 2;
-/** A URL has at most this many readings, so one pasted link cannot fan the resolver out. */
-const MAX_URL_READINGS = 4;
-
-export const isYear = (token: string): boolean => {
-  if (!YEAR_PATTERN.test(token)) return false;
-  const value = Number.parseInt(token, 10);
-  return value >= YEAR_MIN && value <= YEAR_MAX;
-};
-
-const stripScheme = (word: string): string =>
-  word.replace(URL_SCHEME, '').replace(/[.,;:!?]+$/u, '');
-
-/**
- * The labels of a host that can name a directory, most specific first. A host is a name plus
- * decoration: scheme, TLD, path, and labels like "www" or "shop" that describe a site rather
- * than name it. What is left can still be two names - "tidewheel.orbit.dev" is the project
- * "tidewheel" hosted under "orbit" - and a folder is routinely called either, so both readings
- * survive, the leftmost one first. Empty when no recognisable host is there at all, so
- * "node.js" and "vite.config" stay literal directory names.
- */
-export const hostLabels = (word: string): string[] => {
-  const bare = stripScheme(word);
-  if (!HOST_PATTERN.test(bare)) return [];
-  const labels = bare.split('/')[0]?.split('.') ?? [];
-  if (!TLDS.has(labels.at(-1) ?? '')) return [];
-  return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
-};
-
-/**
- * The names a URL carries in its path, deepest first: a repository, a product or a project is
- * routinely the last segment ("github.com/octocat/tidewheel"), while the segments that only
- * paginate or localise a page name nothing.
- */
-export const pathNames = (word: string): string[] => {
-  const bare = stripScheme(word);
-  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare)) return [];
-  return bare
-    .split('/')
-    .slice(1)
-    .map((segment) => (segment.split('?')[0] ?? '').replace(PAGE_SUFFIX, ''))
-    .filter((segment) => segment.length >= MIN_NAME_LENGTH
-      && !/^\d+$/u.test(segment)
-      && !PATH_NOISE.has(segment))
-    .reverse();
-};
-
-/**
- * The names a spelled-out filesystem path carries, deepest first. A path leading nowhere still
- * describes where the user meant to go: "./dev/petalwroks" says a folder called something like
- * "petalwroks" sits inside "dev", and no tier can see that while the separators are in the way.
- */
-export const localNames = (word: string): string[] => {
-  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word)) return [];
-  return word
-    .split('/')
-    .map((segment) => segment.replace(PAGE_SUFFIX, ''))
-    // Only what names no folder at all goes; on a real path "docs" and "en" are real folders.
-    .filter((segment) => !PATH_DOTS.has(segment))
-    .reverse();
-};
-
-/**
- * Every name one word can stand for, most specific first: what the link points at, then what
- * hosts it. "franzai.com/writer" is the writer, not the site around it; when the path names
- * nothing on this machine the host still answers.
- */
-export const urlNames = (word: string): string[] => [...pathNames(word), ...hostLabels(word)];
-
-/**
- * A typed-out path read as what it names and where that sits. Only the whole chain says what the
- * path said - "./cdai/sr" means something like "sr" inside "cdai", while its last segment alone
- * matches every "src" on the machine - but the folders above the name are a place, not a search
- * term, so they gate the candidates without diluting the match. Null when no word spells a path.
+ * A typed-out path read as what it names and where that sits: the folders above the name gate
+ * the candidates without diluting the match.
  */
 export const pathReading = (query: ParsedQuery): ParsedQuery | null => {
-  const tokens: string[] = [];
-  const within = [...query.within];
-  let spelled = false;
-  for (const token of query.tokens) {
-    const [deepest, ...above] = localNames(token);
-    if (deepest === undefined) {
-      tokens.push(token);
-      continue;
-    }
-    spelled = true;
-    tokens.push(deepest);
-    within.push(...above);
-  }
-  return spelled ? { ...query, tokens, within } : null;
+  const read = corePathReading(query.tokens);
+  if (read === null) return null;
+  return { ...query, tokens: [...read.tokens], within: [...query.within, ...read.within] };
 };
-
-export const splitWords = (input: string): string[] =>
-  input
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((word) => word !== '');
 
 /**
  * The same query read as the names its words stand for, best reading first, empty when no word
@@ -159,21 +42,8 @@ export const splitWords = (input: string): string[] =>
  * "nordwind.at", "amt.gv.at" - so the word the user typed always gets the first attempt; these
  * readings are only tried when that finds nothing.
  */
-export const urlReadings = (query: ParsedQuery): ParsedQuery[] => {
-  const names = query.tokens.map(urlNames);
-  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
-  const readings: ParsedQuery[] = [];
-  for (let level = 0; level < depth; level += 1) {
-    const tokens = query.tokens.map((token, index) => {
-      const list = names[index] ?? [];
-      return list[Math.min(level, list.length - 1)] ?? token;
-    });
-    const known = [query, ...readings];
-    if (known.some((seen) => seen.tokens.every((token, index) => token === tokens[index]))) continue;
-    readings.push({ ...query, tokens });
-  }
-  return readings;
-};
+export const urlReadings = (query: ParsedQuery): ParsedQuery[] =>
+  coreUrlReadings(query.tokens).map((tokens) => ({ ...query, tokens }));
 
 interface OperatorScan {
   readonly rest: string[];
@@ -221,9 +91,8 @@ export const tokenize = (input: string): ParsedQuery => {
   const { rest: afterOrder, order } = takeOrder(afterIn);
   const years = afterOrder.filter(isYear);
   const searchable = afterOrder.filter((word) => !isYear(word));
-  const meaningful = searchable.filter((word) => !STOPWORDS.has(word));
   // A directory may literally be named "project" or "folder"; stopwords cannot erase intent.
-  const tokens = meaningful.length > 0 ? meaningful : searchable;
+  const tokens = dropStopwords(searchable, STOPWORDS);
   // An operator or year can also be a literal directory name when it is the entire query.
   if (tokens.length === 0 && words.length > 0) {
     return { raw: input, tokens: words, order: 'none', years: [], rootFilter: null, within: [] };
