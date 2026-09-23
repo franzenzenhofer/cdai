@@ -6,7 +6,7 @@ import {
   backendKind,
   resolveAiBackend,
   type AiBackend,
-} from '../src/ai/backend.js';
+} from '@franzenzenhofer/intent-core/ai/backend';
 import {
   askAi,
   extractJsonBlock,
@@ -16,6 +16,7 @@ import {
   type AiRequest,
 } from '../src/ai/client.js';
 import { buildAiRequest } from '../src/ai/prompt.js';
+import { ANSWER_CONTRACT } from '../src/ai/claude.js';
 import { DEFAULT_AI, type AiConfig } from '../src/config.js';
 import { emptyDb, type Db } from '../src/store/db.js';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
@@ -144,7 +145,7 @@ describe('AI backends', () => {
 
   it('prefers Apfel during automatic detection', () => {
     const found = new Set(['apfel', 'claude']);
-    const resolved = resolveAiBackend(aiConfig({ command: 'auto' }), (command) =>
+    const resolved = resolveAiBackend(aiConfig({ command: 'auto' }), (command: string) =>
       found.has(command) ? `/bin/${command}` : null,
     );
     expect(resolved).toMatchObject({ kind: 'apfel', command: '/bin/apfel', model: '' });
@@ -162,7 +163,7 @@ describe('AI backends', () => {
   it('builds safe provider-specific invocations', () => {
     const claude = resolveAiBackend(aiConfig({ command: 'claude' }), () => '/bin/claude');
     expect(claude).not.toBeNull();
-    expect(aiArgs(claude as AiBackend, 'PROMPT')).toEqual([
+    expect(aiArgs(claude as AiBackend, 'PROMPT', ANSWER_CONTRACT)).toEqual([
       '-p',
       '--model',
       'sonnet',
@@ -179,13 +180,13 @@ describe('AI backends', () => {
       '--no-session-persistence',
       'PROMPT',
     ]);
-    expect(aiArgs({ kind: 'apfel', command: 'apfel', model: '', extraArgs: [] }, '-PROMPT')).toEqual([
+    expect(aiArgs({ kind: 'apfel', command: 'apfel', model: '', extraArgs: [] }, '-PROMPT', ANSWER_CONTRACT)).toEqual([
       '-o', 'json', '--temperature', '0', '--max-tokens', '192', '--', '-PROMPT',
     ]);
-    expect(aiArgs({ kind: 'gemini', command: 'gemini', model: '', extraArgs: [] }, 'PROMPT')).toEqual([
+    expect(aiArgs({ kind: 'gemini', command: 'gemini', model: '', extraArgs: [] }, 'PROMPT', ANSWER_CONTRACT)).toEqual([
       '--output-format', 'json', '--prompt', 'PROMPT',
     ]);
-    expect(aiArgs({ kind: 'ollama', command: 'ollama', model: 'qwen3', extraArgs: [] }, 'PROMPT')).toEqual([
+    expect(aiArgs({ kind: 'ollama', command: 'ollama', model: 'qwen3', extraArgs: [] }, 'PROMPT', ANSWER_CONTRACT)).toEqual([
       'run', 'qwen3', '--format', 'json', 'PROMPT',
     ]);
   });
@@ -194,8 +195,8 @@ describe('AI backends', () => {
     const custom: AiBackend = {
       kind: 'custom', command: 'other-ai', model: 'small', extraArgs: ['run', '{model}', '{prompt}'],
     };
-    expect(aiArgs(custom, 'PROMPT')).toEqual(['run', 'small', 'PROMPT']);
-    expect(aiArgs({ ...custom, extraArgs: ['ask'] }, 'PROMPT')).toEqual(['ask', 'PROMPT']);
+    expect(aiArgs(custom, 'PROMPT', ANSWER_CONTRACT)).toEqual(['run', 'small', 'PROMPT']);
+    expect(aiArgs({ ...custom, extraArgs: ['ask'] }, 'PROMPT', ANSWER_CONTRACT)).toEqual(['ask', 'PROMPT']);
   });
 });
 
@@ -233,7 +234,7 @@ describe('askAi against a real shim process', () => {
   it('names an empty answer instead of blaming the parser', async () => {
     const command = writeShim(`printf ''`);
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
-    expect(outcome).toEqual({ kind: 'none', why: 'unparseable answer, backend said nothing' });
+    expect(outcome).toEqual({ kind: 'none', why: 'no output' });
   });
 
   it('rejects even an existing in-root path when it was not offered', async () => {
@@ -295,7 +296,7 @@ describe('askAi against a real shim process', () => {
   it('caps backend output instead of buffering without limit', async () => {
     const command = writeShim('head -c 1100000 /dev/zero');
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
-    expect(outcome).toEqual({ kind: 'none', why: 'custom output exceeded 1 MiB' });
+    expect(outcome).toEqual({ kind: 'none', why: 'custom output exceeded 1048576 bytes' });
   });
 
   it('degrades when the backend does not exist', async () => {

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { backendLabel, resolveAiBackend } from '../ai/backend.js';
+import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/backend';
 import { configExists, loadConfig, type AiConfig, type Config } from '../config.js';
 import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { configDir, configFile, contractTilde, dataDir, hasPrivateMode } from '@franzenzenhofer/intent-core/paths';

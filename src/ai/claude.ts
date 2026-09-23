@@ -1,14 +1,10 @@
+import type { AiContract } from '@franzenzenhofer/intent-core/ai/cli-args';
+
 /**
- * Claude's non-interactive contract is isolated here because its flags are provider-specific.
+ * What cdai asks a model for: one path out of a closed list, or null, plus a short reason.
  *
- * `--safe-mode` and `--system-prompt` matter as much as `-p`: without them the CLI boots a full
- * agent session for what is a one shot classification - it loads the user's CLAUDE.md, project
- * settings, skills, hooks and MCP servers, which costs seconds and tens of thousands of tokens
- * per `cd` and makes the model answer in prose instead of the one JSON object cdai asked for.
- *
- * `--json-schema` is the same contract enforced by the CLI rather than requested in words: the
- * answer arrives in `structured_output` already shaped, so a chatty turn cannot produce the
- * "unparseable answer" dead end at all.
+ * The provider-specific flags that carry this contract live in the shared core; the contract
+ * itself is cdai's, because only cdai knows it is asking about directories.
  */
 const SYSTEM_PROMPT =
   'You are a path classifier. Reply with exactly one JSON object and no other text, '
@@ -21,25 +17,7 @@ const ANSWER_SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-export const claudeArgs = (
-  extraArgs: readonly string[],
-  model: string,
-  prompt: string,
-): string[] => [
-  ...extraArgs,
-  '-p',
-  '--model',
-  model,
-  '--output-format',
-  'json',
-  '--tools',
-  '',
-  '--safe-mode',
-  '--strict-mcp-config',
-  '--system-prompt',
-  SYSTEM_PROMPT,
-  '--json-schema',
-  ANSWER_SCHEMA,
-  '--no-session-persistence',
-  prompt,
-];
+export const ANSWER_CONTRACT: AiContract = {
+  systemPrompt: SYSTEM_PROMPT,
+  schema: ANSWER_SCHEMA,
+};

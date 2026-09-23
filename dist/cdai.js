@@ -647,7 +647,7 @@ var runAlias = (args) => {
 // src/commands/doctor.ts
 import { existsSync as existsSync10 } from "node:fs";
 
-// src/ai/backend.ts
+// node_modules/@franzenzenhofer/intent-core/dist/ai/backend.js
 import { basename } from "node:path";
 
 // node_modules/@franzenzenhofer/intent-core/dist/executable.js
@@ -676,15 +676,8 @@ var resolveExecutable = (command) => {
   return null;
 };
 
-// src/ai/claude.ts
-var SYSTEM_PROMPT = "You are a path classifier. Reply with exactly one JSON object and no other text, no preamble, no explanation, no code fence.";
-var ANSWER_SCHEMA = JSON.stringify({
-  type: "object",
-  properties: { path: { type: ["string", "null"] }, reason: { type: "string" } },
-  required: ["path", "reason"],
-  additionalProperties: false
-});
-var claudeArgs = (extraArgs, model, prompt) => [
+// node_modules/@franzenzenhofer/intent-core/dist/ai/cli-args.js
+var claudeArgs = (extraArgs, model, prompt, contract) => [
   ...extraArgs,
   "-p",
   "--model",
@@ -696,22 +689,27 @@ var claudeArgs = (extraArgs, model, prompt) => [
   "--safe-mode",
   "--strict-mcp-config",
   "--system-prompt",
-  SYSTEM_PROMPT,
+  contract.systemPrompt,
   "--json-schema",
-  ANSWER_SCHEMA,
+  contract.schema,
   "--no-session-persistence",
   prompt
 ];
 
-// src/ai/backend.ts
+// node_modules/@franzenzenhofer/intent-core/dist/ai/backend.js
 var AUTO_COMMANDS = ["apfel", "claude", "gemini"];
 var DEFAULT_MODEL = { claude: "sonnet" };
+var APFEL_MAX_TOKENS = "192";
 var backendKind = (command) => {
   const name = basename(command).toLowerCase();
-  if (name === "apfel") return "apfel";
-  if (name === "claude") return "claude";
-  if (name === "gemini") return "gemini";
-  if (name === "ollama") return "ollama";
+  if (name === "apfel")
+    return "apfel";
+  if (name === "claude")
+    return "claude";
+  if (name === "gemini")
+    return "gemini";
+  if (name === "ollama")
+    return "ollama";
   return "custom";
 };
 var backend = (command, ai) => {
@@ -726,43 +724,64 @@ var backend = (command, ai) => {
 var resolveAuto = (ai, resolveCommand) => {
   for (const command of AUTO_COMMANDS) {
     const executable = resolveCommand(command);
-    if (executable !== null) return backend(executable, ai);
+    if (executable !== null)
+      return backend(executable, ai);
   }
   if (ai.model.trim() !== "") {
     const ollama = resolveCommand("ollama");
-    if (ollama !== null) return backend(ollama, ai);
+    if (ollama !== null)
+      return backend(ollama, ai);
   }
   return null;
 };
 var resolveAiBackend = (ai, resolveCommand = resolveExecutable) => {
-  if (ai.command === "auto") return resolveAuto(ai, resolveCommand);
+  if (ai.command === "auto")
+    return resolveAuto(ai, resolveCommand);
   const executable = resolveCommand(ai.command);
-  if (executable === null) return null;
+  if (executable === null)
+    return null;
   const resolved = backend(executable, ai);
   return resolved.kind === "ollama" && resolved.model === "" ? null : resolved;
 };
 var modelArgs = (model) => model === "" ? [] : ["--model", model];
-var customArgs = (backend2, prompt) => {
-  const hasPrompt = backend2.extraArgs.some((arg) => arg.includes("{prompt}"));
-  const expanded = backend2.extraArgs.map(
-    (arg) => arg.replaceAll("{model}", backend2.model).replaceAll("{prompt}", prompt)
-  );
+var customArgs = (target, prompt) => {
+  const hasPrompt = target.extraArgs.some((arg) => arg.includes("{prompt}"));
+  const expanded = target.extraArgs.map((arg) => arg.replaceAll("{model}", target.model).replaceAll("{prompt}", prompt));
   return hasPrompt ? expanded : [...expanded, prompt];
 };
-var aiArgs = (backend2, prompt) => {
-  if (backend2.kind === "apfel") {
-    return [...backend2.extraArgs, "-o", "json", "--temperature", "0", "--max-tokens", "192", "--", prompt];
+var aiArgs = (target, prompt, contract) => {
+  if (target.kind === "apfel") {
+    return [
+      ...target.extraArgs,
+      "-o",
+      "json",
+      "--temperature",
+      "0",
+      "--max-tokens",
+      APFEL_MAX_TOKENS,
+      "--",
+      prompt
+    ];
   }
-  if (backend2.kind === "claude") return claudeArgs(backend2.extraArgs, backend2.model, prompt);
-  if (backend2.kind === "gemini") {
-    return [...backend2.extraArgs, ...modelArgs(backend2.model), "--output-format", "json", "--prompt", prompt];
+  if (target.kind === "claude") {
+    return claudeArgs(target.extraArgs, target.model, prompt, contract);
   }
-  if (backend2.kind === "ollama") {
-    return ["run", backend2.model, ...backend2.extraArgs, "--format", "json", prompt];
+  if (target.kind === "gemini") {
+    return [
+      ...target.extraArgs,
+      ...modelArgs(target.model),
+      "--output-format",
+      "json",
+      "--prompt",
+      prompt
+    ];
   }
-  return customArgs(backend2, prompt);
+  if (target.kind === "ollama") {
+    return ["run", target.model, ...target.extraArgs, "--format", "json", prompt];
+  }
+  return customArgs(target, prompt);
 };
-var backendLabel = (backend2) => backend2.model === "" ? backend2.kind : `${backend2.kind} ${backend2.model}`;
+var backendLabel = (target) => target.model === "" ? target.kind : `${target.kind} ${target.model}`;
 
 // node_modules/@franzenzenhofer/intent-core/dist/picker.js
 import { spawnSync } from "node:child_process";
@@ -2257,95 +2276,11 @@ var runIndex = (args) => {
 import { statSync as statSync6 } from "node:fs";
 import { resolve as resolve4 } from "node:path";
 
-// src/ai/process.ts
-import { spawn } from "node:child_process";
-
-// src/ai/text.ts
-var CONTROL_MAX = 32;
-var DELETE_CODE = 127;
-var flattenText = (text, maxLength) => [...text].map((char) => {
-  const code = char.codePointAt(0) ?? 0;
-  return code < CONTROL_MAX || code === DELETE_CODE ? " " : char;
-}).join("").replace(/\s+/gu, " ").trim().slice(0, maxLength);
-
-// src/ai/process.ts
-var MAX_OUTPUT_BYTES = 1024 * 1024;
-var MAX_STDERR_BYTES = 4096;
-var MAX_STDERR_EXCERPT = 120;
-var KILL_GRACE_MS = 250;
-var spawnBackend = (backend2, prompt) => spawn(backend2.command, aiArgs(backend2, prompt), {
-  detached: process.platform !== "win32",
-  env: { ...process.env, NO_COLOR: "1" },
-  stdio: ["ignore", "pipe", "pipe"]
-});
-var terminateBackend = (child, signal) => {
-  try {
-    if (process.platform !== "win32" && child.pid !== void 0) process.kill(-child.pid, signal);
-    else child.kill(signal);
-  } catch {
-  }
-};
-var abortBackend = (child, error, finish2) => {
-  terminateBackend(child, "SIGTERM");
-  child.stdout.destroy();
-  child.stderr.destroy();
-  const escalation = setTimeout(() => terminateBackend(child, "SIGKILL"), KILL_GRACE_MS);
-  escalation.unref();
-  finish2(error);
-};
-var collectOutput = (child, output, abort, label) => {
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    output.text += chunk;
-    output.bytes += Buffer.byteLength(chunk);
-    if (output.bytes > MAX_OUTPUT_BYTES) abort(new Error(`${label} output exceeded 1 MiB`));
-  });
-};
-var collectDiagnostics = (child, diagnostics) => {
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => {
-    if (diagnostics.bytes >= MAX_STDERR_BYTES) return;
-    diagnostics.text += chunk;
-    diagnostics.bytes += Buffer.byteLength(chunk);
-  });
-};
-var exitError = (label, code, diagnostics) => {
-  const detail = flattenText(diagnostics, MAX_STDERR_EXCERPT);
-  const suffix = detail === "" ? "" : `: ${detail}`;
-  return new Error(`${label} exited with ${String(code)}${suffix}`);
-};
-var runAiCommand = (backend2, prompt, timeoutMs) => new Promise((resolveOutput, reject) => {
-  const child = spawnBackend(backend2, prompt);
-  const output = { text: "", bytes: 0 };
-  const diagnostics = { text: "", bytes: 0 };
-  let settled = false;
-  const finish2 = (error) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    if (error === null) resolveOutput(output.text);
-    else reject(error);
-  };
-  const abort = (error) => {
-    if (!settled) abortBackend(child, error, finish2);
-  };
-  const timer = setTimeout(
-    () => abort(new Error(`${backend2.kind} timed out after ${String(timeoutMs)}ms`)),
-    timeoutMs
-  );
-  collectOutput(child, output, abort, backend2.kind);
-  collectDiagnostics(child, diagnostics);
-  child.on("error", finish2);
-  child.on("close", (code) => finish2(code === 0 ? null : exitError(backend2.kind, code, diagnostics.text)));
-});
-
-// src/ai/client.ts
+// node_modules/@franzenzenhofer/intent-core/dist/ai/envelope.js
 var MAX_JSON_CANDIDATES = 32;
 var MAX_ENVELOPE_DEPTH = 6;
-var MAX_REASON_LENGTH = 120;
-var MAX_EXCERPT_LENGTH = 80;
 var ENVELOPE_KEYS = [
-  // A schema-validated answer is already the object cdai asked for, so it is read before prose.
+  // A schema-validated answer is already the object that was asked for, so it is read first.
   "structured_output",
   "result",
   "response",
@@ -2371,51 +2306,57 @@ var balancedObjectAt = (text, start) => {
   let escaped = false;
   for (let i = start; i < text.length; i += 1) {
     const char = text[i];
-    if (quoted && escaped) escaped = false;
-    else if (quoted && char === "\\") escaped = true;
-    else if (char === '"') quoted = !quoted;
-    else if (!quoted && char === "{") depth += 1;
-    else if (!quoted && char === "}" && --depth === 0) return text.slice(start, i + 1);
+    if (quoted && escaped)
+      escaped = false;
+    else if (quoted && char === "\\")
+      escaped = true;
+    else if (char === '"')
+      quoted = !quoted;
+    else if (!quoted && char === "{")
+      depth += 1;
+    else if (!quoted && char === "}" && --depth === 0)
+      return text.slice(start, i + 1);
   }
   return null;
 };
 var jsonValues = (text) => {
   const exact = parseJson(text.trim());
-  if (exact !== void 0) return [exact];
+  if (exact !== void 0)
+    return [exact];
   const values = [];
   for (let start = text.indexOf("{"); start !== -1; start = text.indexOf("{", start + 1)) {
     const block = balancedObjectAt(text, start);
     const parsed = block === null ? void 0 : parseJson(block);
-    if (parsed !== void 0) values.push(parsed);
-    if (values.length >= MAX_JSON_CANDIDATES) break;
+    if (parsed !== void 0)
+      values.push(parsed);
+    if (values.length >= MAX_JSON_CANDIDATES)
+      break;
   }
   return values;
 };
-var directAnswer = (value) => {
-  if (!isRecord8(value) || !Object.hasOwn(value, "path")) return null;
-  const path = value["path"];
-  if (path !== null && typeof path !== "string") return null;
-  const reason = value["reason"];
-  return {
-    path: path === null || path === "" ? null : path,
-    reason: typeof reason === "string" ? reason : ""
-  };
-};
 var childrenOf2 = (value) => {
-  if (Array.isArray(value)) return value;
-  if (!isRecord8(value)) return [];
+  if (Array.isArray(value))
+    return value;
+  if (!isRecord8(value))
+    return [];
   return ENVELOPE_KEYS.flatMap((key) => Object.hasOwn(value, key) ? [value[key]] : []);
 };
-var parseAiAnswer = (raw) => {
+var unwrapAnswer = (raw, read) => {
   const queue = [[raw, 0]];
   const seenText = /* @__PURE__ */ new Set();
   while (queue.length > 0) {
-    const [value, depth] = queue.shift() ?? [];
-    const answer = directAnswer(value);
-    if (answer !== null) return answer;
-    if (depth === void 0 || depth >= MAX_ENVELOPE_DEPTH) continue;
+    const entry = queue.shift();
+    if (entry === void 0)
+      continue;
+    const [value, depth] = entry;
+    const answer = read(value);
+    if (answer !== null)
+      return answer;
+    if (depth >= MAX_ENVELOPE_DEPTH)
+      continue;
     if (typeof value === "string") {
-      if (seenText.has(value)) continue;
+      if (seenText.has(value))
+        continue;
       seenText.add(value);
       queue.push(...jsonValues(value).map((parsed) => [parsed, depth + 1]));
     } else {
@@ -2423,6 +2364,162 @@ var parseAiAnswer = (raw) => {
     }
   }
   return null;
+};
+
+// node_modules/@franzenzenhofer/intent-core/dist/ai/spawn.js
+import { spawn } from "node:child_process";
+
+// node_modules/@franzenzenhofer/intent-core/dist/ai/text.js
+var CONTROL_MAX = 32;
+var DELETE_CODE = 127;
+var flattenText = (text, maxLength) => [...text].map((char) => {
+  const code = char.codePointAt(0) ?? 0;
+  return code < CONTROL_MAX || code === DELETE_CODE ? " " : char;
+}).join("").replace(/\s+/gu, " ").trim().slice(0, maxLength);
+
+// node_modules/@franzenzenhofer/intent-core/dist/ai/spawn.js
+var KILL_GRACE_MS = 250;
+var MAX_STDERR_EXCERPT = 120;
+var terminate = (child, signal) => {
+  try {
+    if (process.platform !== "win32" && child.pid !== void 0)
+      process.kill(-child.pid, signal);
+    else
+      child.kill(signal);
+  } catch {
+  }
+};
+var append = (buffer, chunk, max, keep) => {
+  buffer.bytes += Buffer.byteLength(chunk);
+  if (keep && buffer.bytes <= max)
+    buffer.text += chunk;
+  return buffer.bytes <= max;
+};
+var exitError = (label, status, stderr) => {
+  const detail = flattenText(stderr, MAX_STDERR_EXCERPT);
+  return new Error(`${label} exited with ${String(status)}${detail === "" ? "" : `: ${detail}`}`);
+};
+var launch = (command, args, limits) => spawn(command, [...args], {
+  detached: process.platform !== "win32",
+  env: limits.env ?? { ...process.env, NO_COLOR: "1" },
+  stdio: ["ignore", "pipe", "pipe"]
+});
+var pipeOutput = (child, limits, session) => {
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk) => {
+    if (!append(session.out, chunk, limits.maxOutputBytes, limits.captureStdout)) {
+      session.abort(new Error(`${limits.label} output exceeded ${String(limits.maxOutputBytes)} bytes`));
+    }
+  });
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk) => {
+    append(session.err, chunk, limits.maxStderrBytes, true);
+  });
+};
+var killAfterGrace = (child) => {
+  const escalation = setTimeout(() => terminate(child, "SIGKILL"), KILL_GRACE_MS);
+  escalation.unref();
+};
+var createGuard = (child, limits, reject) => {
+  let settled = false;
+  const stop = () => {
+    if (settled)
+      return false;
+    settled = true;
+    clearTimeout(timer);
+    return true;
+  };
+  const abort = (error) => {
+    if (!stop())
+      return;
+    terminate(child, "SIGTERM");
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    killAfterGrace(child);
+    reject(error);
+  };
+  const timer = setTimeout(() => abort(new Error(`${limits.label} timed out after ${String(limits.timeoutMs)}ms`)), limits.timeoutMs);
+  return { stop, abort };
+};
+var startRun = (run) => {
+  const startedAt = Date.now();
+  const child = launch(run.command, run.args, run.limits);
+  const out = { text: "", bytes: 0 };
+  const err = { text: "", bytes: 0 };
+  const guard = createGuard(child, run.limits, run.reject);
+  pipeOutput(child, run.limits, { out, err, abort: guard.abort });
+  child.on("error", (error) => {
+    if (guard.stop())
+      run.reject(error);
+  });
+  child.on("close", (status) => {
+    if (!guard.stop())
+      return;
+    run.settle({ status, stdout: out.text, stderr: err.text, durationMs: Date.now() - startedAt });
+  });
+};
+var runContained = (command, args, limits) => new Promise((settle, reject) => {
+  startRun({ command, args, limits, settle, reject });
+});
+
+// node_modules/@franzenzenhofer/intent-core/dist/ai/ask.js
+var MAX_OUTPUT_BYTES = 1024 * 1024;
+var MAX_STDERR_BYTES = 4096;
+var MAX_EXCERPT_LENGTH = 80;
+var MAX_REASON_LENGTH = 120;
+var sanitizeReason = (reason) => flattenText(reason, MAX_REASON_LENGTH);
+var excerpt = (raw) => {
+  const flattened = flattenText(raw, MAX_EXCERPT_LENGTH);
+  return flattened === "" ? "no output" : `unparseable answer: ${flattened}`;
+};
+var askBackend = async (backend2, prompt, options) => {
+  let raw;
+  try {
+    const result = await runContained(backend2.command, aiArgs(backend2, prompt, options.contract), {
+      timeoutMs: options.timeoutMs,
+      maxOutputBytes: MAX_OUTPUT_BYTES,
+      maxStderrBytes: MAX_STDERR_BYTES,
+      label: backend2.kind,
+      captureStdout: true
+    });
+    if (result.status !== 0)
+      throw exitError(backend2.kind, result.status, result.stderr);
+    raw = result.stdout;
+  } catch (error) {
+    return { kind: "none", why: error instanceof Error ? error.message : "ai backend failed" };
+  }
+  if (options.debug === true)
+    process.stderr.write(`raw ai output
+${raw}
+`);
+  const answer = unwrapAnswer(raw, options.read);
+  return answer === null ? { kind: "none", why: excerpt(raw) } : { kind: "answer", answer };
+};
+
+// src/ai/claude.ts
+var SYSTEM_PROMPT = "You are a path classifier. Reply with exactly one JSON object and no other text, no preamble, no explanation, no code fence.";
+var ANSWER_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: { path: { type: ["string", "null"] }, reason: { type: "string" } },
+  required: ["path", "reason"],
+  additionalProperties: false
+});
+var ANSWER_CONTRACT = {
+  systemPrompt: SYSTEM_PROMPT,
+  schema: ANSWER_SCHEMA
+};
+
+// src/ai/client.ts
+var isRecord9 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var readAiAnswer = (value) => {
+  if (!isRecord9(value) || !Object.hasOwn(value, "path")) return null;
+  const path = value["path"];
+  if (path !== null && typeof path !== "string") return null;
+  const reason = value["reason"];
+  return {
+    path: path === null || path === "" ? null : path,
+    reason: typeof reason === "string" ? reason : ""
+  };
 };
 var isDirectory2 = (path) => {
   try {
@@ -2440,28 +2537,18 @@ var matchAiPath = (path, candidates) => {
   }
   return candidates.find((candidate) => resolve4(candidate) === requested && isDirectory2(candidate)) ?? null;
 };
-var sanitizeReason = (reason) => flattenText(reason, MAX_REASON_LENGTH);
-var excerpt = (raw) => {
-  const visible = flattenText(raw.slice(0, MAX_EXCERPT_LENGTH * 4), MAX_EXCERPT_LENGTH);
-  if (visible === "") return "unparseable answer, backend said nothing";
-  return `unparseable answer: ${visible}`;
-};
 var askAi = async (request, backend2, timeoutMs) => {
   if (request.candidates.length === 0) return { kind: "none", why: "no candidates" };
-  let raw;
-  try {
-    raw = await runAiCommand(backend2, request.prompt, timeoutMs);
-  } catch (error) {
-    return { kind: "none", why: error instanceof Error ? error.message : "ai backend failed" };
-  }
-  if (process.env["CDAI_DEBUG"] === "1") process.stderr.write(`cdai: raw ai output
-${raw}
-`);
-  const answer = parseAiAnswer(raw);
-  if (answer === null) return { kind: "none", why: excerpt(raw) };
-  const reason = sanitizeReason(answer.reason);
-  if (answer.path === null) return { kind: "none", why: reason === "" ? "no idea" : reason };
-  const path = matchAiPath(answer.path, request.candidates);
+  const asked = await askBackend(backend2, request.prompt, {
+    contract: ANSWER_CONTRACT,
+    timeoutMs,
+    read: readAiAnswer,
+    debug: process.env["CDAI_DEBUG"] === "1"
+  });
+  if (asked.kind === "none") return { kind: "none", why: asked.why };
+  const reason = sanitizeReason(asked.answer.reason);
+  if (asked.answer.path === null) return { kind: "none", why: reason === "" ? "no idea" : reason };
+  const path = matchAiPath(asked.answer.path, request.candidates);
   if (path === null) return { kind: "none", why: "answer was not one of the offered directories" };
   return { kind: "path", path, reason };
 };

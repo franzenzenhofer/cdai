@@ -1,4 +1,4 @@
-import { backendLabel, resolveAiBackend } from '../ai/backend.js';
+import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/backend';
 import { askAi, type AiOutcome } from '../ai/client.js';
 import { buildAiRequest } from '../ai/prompt.js';
 import { loadConfig, type Config } from '../config.js';

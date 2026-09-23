@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 import { basename } from 'node:path';
-import { backendLabel, resolveAiBackend } from '../ai/backend.js';
+import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/backend';
 import {
   DEFAULT_AI,
   DEFAULT_IGNORE,
