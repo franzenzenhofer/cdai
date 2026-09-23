@@ -2380,6 +2380,15 @@ var flattenText = (text, maxLength) => [...text].map((char) => {
 // node_modules/@franzenzenhofer/intent-core/dist/ai/spawn.js
 var KILL_GRACE_MS = 250;
 var MAX_STDERR_EXCERPT = 120;
+var KIB = 1024;
+var MIB = KIB * KIB;
+var humanBytes = (bytes) => {
+  if (bytes >= MIB && bytes % MIB === 0)
+    return `${String(bytes / MIB)} MiB`;
+  if (bytes >= KIB && bytes % KIB === 0)
+    return `${String(bytes / KIB)} KiB`;
+  return `${String(bytes)} bytes`;
+};
 var terminate = (child, signal) => {
   try {
     if (process.platform !== "win32" && child.pid !== void 0)
@@ -2408,7 +2417,7 @@ var pipeOutput = (child, limits, session) => {
   child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk) => {
     if (!append(session.out, chunk, limits.maxOutputBytes, limits.captureStdout)) {
-      session.abort(new Error(`${limits.label} output exceeded ${String(limits.maxOutputBytes)} bytes`));
+      session.abort(new Error(`${limits.label} output exceeded ${humanBytes(limits.maxOutputBytes)}`));
     }
   });
   child.stderr?.setEncoding("utf8");
@@ -3001,9 +3010,9 @@ var runSetup = (args) => {
   return writeSetup(existing, options, [...plan.candidates]);
 };
 
-// src/shell/quote.ts
-var shellQuote = (value) => `'${value.split(`'`).join(`'\\''`)}'`;
-var fishQuote = (value) => `'${value.split(`'`).join(`\\'`)}'`;
+// node_modules/@franzenzenhofer/intent-core/dist/shell/quote.js
+var shellQuote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
+var fishQuote = (value) => `'${value.replaceAll("'", `\\'`)}'`;
 
 // src/shell/bash.ts
 var recorder = () => `if [ -n "\${EPOCHSECONDS+x}" ]; then
@@ -3571,7 +3580,7 @@ var package_default = {
   },
   devDependencies: {
     "@eslint/js": "^9.39.0",
-    "@franzenzenhofer/intent-core": "github:franzenzenhofer/intent-core#0e9e9dd34b344a089764086991e23b3b6a30cfde",
+    "@franzenzenhofer/intent-core": "github:franzenzenhofer/intent-core#d0669c2ba0d63e521a22c44d9cf52b016a625914",
     "@types/node": "^22.18.0",
     "@typescript-eslint/eslint-plugin": "^8.46.0",
     "@typescript-eslint/parser": "^8.46.0",

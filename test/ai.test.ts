@@ -296,7 +296,7 @@ describe('askAi against a real shim process', () => {
   it('caps backend output instead of buffering without limit', async () => {
     const command = writeShim('head -c 1100000 /dev/zero');
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), SHIM_TIMEOUT_MS);
-    expect(outcome).toEqual({ kind: 'none', why: 'custom output exceeded 1048576 bytes' });
+    expect(outcome).toEqual({ kind: 'none', why: 'custom output exceeded 1 MiB' });
   });
 
   it('degrades when the backend does not exist', async () => {

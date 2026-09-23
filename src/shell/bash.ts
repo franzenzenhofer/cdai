@@ -5,7 +5,7 @@ import {
   CLI_CONTROL_PATTERN,
   CLI_CONTROL_WORDS,
 } from './control.js';
-import { shellQuote } from './quote.js';
+import { shellQuote } from '@franzenzenhofer/intent-core/shell/quote';
 
 const recorder = (): string => `if [ -n "\${EPOCHSECONDS+x}" ]; then
   __cdai_now() { printf '%s' "$EPOCHSECONDS"; }

@@ -1,7 +1,7 @@
 import { dataDir } from '@franzenzenhofer/intent-core/paths';
 import { EXIT } from '../protocol.js';
 import { CLI_CONTROL_WORDS } from './control.js';
-import { fishQuote } from './quote.js';
+import { fishQuote } from '@franzenzenhofer/intent-core/shell/quote';
 import { fishSmartTab } from './fish-smart-tab.js';
 
 const recorder = (): string => `function __cdai_record --on-variable PWD

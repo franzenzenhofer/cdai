@@ -5,7 +5,7 @@ import {
   CLI_CONTROL_WORDS,
   ZSH_CD_FLAG_CHARS,
 } from './control.js';
-import { shellQuote } from './quote.js';
+import { shellQuote } from '@franzenzenhofer/intent-core/shell/quote';
 
 const recorder = (): string => `__cdai_record() {
   local previous_umask="$(umask)"
