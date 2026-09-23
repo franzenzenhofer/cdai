@@ -10,7 +10,7 @@ import {
   loadIndex,
   matchesConfig,
   refreshIndex,
-} from '../src/store/indexer.js';
+} from '@franzenzenhofer/intent-core/store/indexer';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
 let fixture: Fixture;

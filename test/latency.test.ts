@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 import { completeQuery } from '../src/commands/complete.js';
 import { emptyDb } from '../src/store/db.js';
-import type { DirIndex, IndexEntry } from '../src/store/indexer.js';
+import type { DirIndex, IndexEntry } from '@franzenzenhofer/intent-core/store/indexer';
 
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');

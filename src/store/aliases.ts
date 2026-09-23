@@ -2,13 +2,25 @@ import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { tryReadJson } from '@franzenzenhofer/intent-core/json';
 import { isProtocolSafePath, writeAtomic } from '@franzenzenhofer/intent-core/paths';
-import { aliasesFile } from '../state.js';
 import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
+import {
+  findAlias as coreFind,
+  findAliasWhere as coreFindWhere,
+  forgetAlias as coreForget,
+  loadAliases as coreLoad,
+  rememberAlias as coreRemember,
+  normalizeIntent,
+  MAX_ALIASES,
+  type Alias,
+  type AliasSpec,
+} from '@franzenzenhofer/intent-core/store/aliases';
+import { aliasesFile } from '../state.js';
+
+export { MAX_ALIASES, normalizeIntent };
 
 const ALIAS_VERSION = 1;
-export const MAX_ALIASES = 256;
-const MAX_QUERY_LENGTH = 512;
 
+/** What cdai remembers: one absolute directory, under the exact words that asked for it. */
 export interface IntentAlias {
   readonly query: string;
   readonly path: string;
@@ -23,45 +35,63 @@ export interface AliasDb {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-export const normalizeIntent = (query: string): string =>
-  query.trim().toLowerCase().replace(/\s+/g, ' ');
-
-const readAlias = (value: unknown): IntentAlias | undefined => {
-  if (!isRecord(value)) return undefined;
-  const { query, path, updatedAt } = value;
-  if (typeof query !== 'string' || query === '' || query.length > MAX_QUERY_LENGTH) return undefined;
-  if (typeof path !== 'string' || !isAbsolute(path) || !isProtocolSafePath(path)) return undefined;
-  if (typeof updatedAt !== 'number' || !Number.isSafeInteger(updatedAt) || updatedAt < 0) return undefined;
-  return { query, path, updatedAt };
+/** cdai's own validator: the shared store keeps the value opaque and asks the product. */
+const readPath = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || !isAbsolute(value) || !isProtocolSafePath(value)) return undefined;
+  return value;
 };
+
+const spec: AliasSpec<string> = { file: aliasesFile, readValue: readPath };
+
+/**
+ * Aliases written before the store was shared say `path` where it now says `value`.
+ *
+ * The file is a person's own remembered intents, so it is converted in place the first time it
+ * is read rather than quietly dropped for not matching the new shape. Idempotent, and it only
+ * touches a file that really carries the old spelling.
+ */
+const migrateLegacy = (): void => {
+  const file = aliasesFile();
+  if (!existsSync(file)) return;
+  const parsed = tryReadJson(file);
+  if (!isRecord(parsed) || !Array.isArray(parsed['aliases'])) return;
+  const legacy = parsed['aliases'].filter(
+    (entry) => isRecord(entry) && typeof entry['path'] === 'string' && entry['value'] === undefined,
+  );
+  if (legacy.length === 0) return;
+  const aliases = parsed['aliases'].map((entry) => {
+    if (!isRecord(entry) || typeof entry['path'] !== 'string') return entry;
+    return { query: entry['query'], value: entry['path'], updatedAt: entry['updatedAt'] };
+  });
+  withStateLock(file, () => {
+    writeAtomic(file, `${JSON.stringify({ version: ALIAS_VERSION, aliases })}\n`);
+  });
+};
+
+// Keyed by file, not a bare flag: one process can be pointed at more than one state directory,
+// and the second one would otherwise never be looked at.
+const checked = new Set<string>();
+
+const ready = (): AliasSpec<string> => {
+  const file = aliasesFile();
+  if (!checked.has(file)) {
+    migrateLegacy();
+    checked.add(file);
+  }
+  return spec;
+};
+
+const toIntent = (alias: Alias<string>): IntentAlias =>
+  ({ query: alias.query, path: alias.value, updatedAt: alias.updatedAt });
 
 export const emptyAliases = (): AliasDb => ({ version: ALIAS_VERSION, aliases: [] });
 
-export const loadAliases = (): AliasDb => {
-  const file = aliasesFile();
-  if (!existsSync(file)) return emptyAliases();
-  const parsed = tryReadJson(file);
-  if (isRecord(parsed) && typeof parsed['version'] === 'number' && parsed['version'] !== ALIAS_VERSION) {
-    throw new Error(`unsupported alias schema version ${String(parsed['version'])}; state was not modified`);
-  }
-  if (!isRecord(parsed) || parsed['version'] !== ALIAS_VERSION || !Array.isArray(parsed['aliases'])) {
-    return emptyAliases();
-  }
-  const aliases = parsed['aliases']
-    .slice(0, MAX_ALIASES)
-    .map(readAlias)
-    .filter((a): a is IntentAlias => a !== undefined);
-  return { version: ALIAS_VERSION, aliases };
-};
-
-const saveAliasesUnlocked = (aliases: readonly IntentAlias[]): void => {
-  writeAtomic(aliasesFile(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}\n`);
-};
+export const loadAliases = (): AliasDb =>
+  ({ version: ALIAS_VERSION, aliases: coreLoad(ready()).map(toIntent) });
 
 export const findAlias = (query: string): IntentAlias | undefined => {
-  const normalized = normalizeIntent(query);
-  if (normalized === '') return undefined;
-  return loadAliases().aliases.find((alias) => alias.query === normalized);
+  const found = coreFind(ready(), query);
+  return found === undefined ? undefined : toIntent(found);
 };
 
 /**
@@ -71,24 +101,13 @@ export const findAlias = (query: string): IntentAlias | undefined => {
  */
 export const findAliasWhere = (
   accepts: (query: string) => boolean,
-): IntentAlias | undefined => loadAliases().aliases.find((alias) => accepts(alias.query));
+): IntentAlias | undefined => {
+  const found = coreFindWhere(ready(), accepts);
+  return found === undefined ? undefined : toIntent(found);
+};
 
 export const rememberAlias = (query: string, path: string, updatedAt: number): void => {
-  const normalized = normalizeIntent(query);
-  if (normalized === '' || normalized.length > MAX_QUERY_LENGTH || !isAbsolute(path) || !isProtocolSafePath(path)) return;
-  withStateLock(aliasesFile(), () => {
-    const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
-    saveAliasesUnlocked([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
-  });
+  coreRemember(ready(), query, path, updatedAt);
 };
 
-export const forgetAlias = (query: string): boolean => {
-  const normalized = normalizeIntent(query);
-  return withStateLock(aliasesFile(), () => {
-    const db = loadAliases();
-    const kept = db.aliases.filter((alias) => alias.query !== normalized);
-    if (kept.length === db.aliases.length) return false;
-    saveAliasesUnlocked(kept);
-    return true;
-  });
-};
+export const forgetAlias = (query: string): boolean => coreForget(ready(), query);

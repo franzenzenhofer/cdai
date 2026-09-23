@@ -426,7 +426,7 @@ var jump = (path) => {
 };
 
 // src/store/aliases.ts
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { isAbsolute as isAbsolute2 } from "node:path";
 
 // node_modules/@franzenzenhofer/intent-core/dist/json.js
@@ -439,6 +439,71 @@ var tryReadJson = (file) => {
   }
 };
 
+// node_modules/@franzenzenhofer/intent-core/dist/store/aliases.js
+import { existsSync as existsSync4 } from "node:fs";
+var ALIAS_VERSION = 1;
+var MAX_ALIASES = 256;
+var MAX_QUERY_LENGTH = 512;
+var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/gu, " ");
+var validQuery = (query) => typeof query === "string" && query !== "" && query.length <= MAX_QUERY_LENGTH;
+var readAlias = (spec2, value) => {
+  if (!isRecord3(value))
+    return void 0;
+  const { query, updatedAt } = value;
+  if (!validQuery(query))
+    return void 0;
+  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) {
+    return void 0;
+  }
+  const parsed = spec2.readValue(value["value"]);
+  return parsed === void 0 ? void 0 : { query, value: parsed, updatedAt };
+};
+var checkVersion = (parsed) => {
+  if (isRecord3(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
+    throw new Error(`unsupported alias schema version ${String(parsed["version"])}; state was not modified`);
+  }
+};
+var loadAliases = (spec2) => {
+  const path = spec2.file();
+  if (!existsSync4(path))
+    return [];
+  const parsed = tryReadJson(path);
+  checkVersion(parsed);
+  if (!isRecord3(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"]))
+    return [];
+  return parsed["aliases"].slice(0, MAX_ALIASES).map((value) => readAlias(spec2, value)).filter((alias) => alias !== void 0);
+};
+var save = (spec2, aliases) => {
+  writeAtomic(spec2.file(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
+`);
+};
+var findAlias = (spec2, query) => {
+  const normalized = normalizeIntent(query);
+  return normalized === "" ? void 0 : loadAliases(spec2).find((a) => a.query === normalized);
+};
+var findAliasWhere = (spec2, accepts) => loadAliases(spec2).find((alias) => accepts(alias.query));
+var rememberAlias = (spec2, query, value, updatedAt) => {
+  const normalized = normalizeIntent(query);
+  if (!validQuery(normalized) || spec2.readValue(value) === void 0)
+    return;
+  withStateLock(spec2.file(), () => {
+    const rest = loadAliases(spec2).filter((alias) => alias.query !== normalized);
+    save(spec2, [{ query: normalized, value, updatedAt }, ...rest].slice(0, MAX_ALIASES));
+  });
+};
+var forgetAlias = (spec2, query) => {
+  const normalized = normalizeIntent(query);
+  return withStateLock(spec2.file(), () => {
+    const all = loadAliases(spec2);
+    const kept = all.filter((alias) => alias.query !== normalized);
+    if (kept.length === all.length)
+      return false;
+    save(spec2, kept);
+    return true;
+  });
+};
+
 // src/state.ts
 var dbFile = () => stateFile("db.json");
 var indexFile = () => stateFile("index.json");
@@ -446,61 +511,54 @@ var aliasesFile = () => stateFile("aliases.json");
 var visitsLog = () => stateFile("visits.log");
 
 // src/store/aliases.ts
-var ALIAS_VERSION = 1;
-var MAX_ALIASES = 256;
-var MAX_QUERY_LENGTH = 512;
-var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/g, " ");
-var readAlias = (value) => {
-  if (!isRecord3(value)) return void 0;
-  const { query, path, updatedAt } = value;
-  if (typeof query !== "string" || query === "" || query.length > MAX_QUERY_LENGTH) return void 0;
-  if (typeof path !== "string" || !isAbsolute2(path) || !isProtocolSafePath(path)) return void 0;
-  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) return void 0;
-  return { query, path, updatedAt };
+var ALIAS_VERSION2 = 1;
+var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var readPath = (value) => {
+  if (typeof value !== "string" || !isAbsolute2(value) || !isProtocolSafePath(value)) return void 0;
+  return value;
 };
-var emptyAliases = () => ({ version: ALIAS_VERSION, aliases: [] });
-var loadAliases = () => {
+var spec = { file: aliasesFile, readValue: readPath };
+var migrateLegacy = () => {
   const file = aliasesFile();
-  if (!existsSync4(file)) return emptyAliases();
+  if (!existsSync5(file)) return;
   const parsed = tryReadJson(file);
-  if (isRecord3(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
-    throw new Error(`unsupported alias schema version ${String(parsed["version"])}; state was not modified`);
-  }
-  if (!isRecord3(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"])) {
-    return emptyAliases();
-  }
-  const aliases = parsed["aliases"].slice(0, MAX_ALIASES).map(readAlias).filter((a) => a !== void 0);
-  return { version: ALIAS_VERSION, aliases };
-};
-var saveAliasesUnlocked = (aliases) => {
-  writeAtomic(aliasesFile(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
+  if (!isRecord4(parsed) || !Array.isArray(parsed["aliases"])) return;
+  const legacy = parsed["aliases"].filter(
+    (entry) => isRecord4(entry) && typeof entry["path"] === "string" && entry["value"] === void 0
+  );
+  if (legacy.length === 0) return;
+  const aliases = parsed["aliases"].map((entry) => {
+    if (!isRecord4(entry) || typeof entry["path"] !== "string") return entry;
+    return { query: entry["query"], value: entry["path"], updatedAt: entry["updatedAt"] };
+  });
+  withStateLock(file, () => {
+    writeAtomic(file, `${JSON.stringify({ version: ALIAS_VERSION2, aliases })}
 `);
-};
-var findAlias = (query) => {
-  const normalized = normalizeIntent(query);
-  if (normalized === "") return void 0;
-  return loadAliases().aliases.find((alias) => alias.query === normalized);
-};
-var findAliasWhere = (accepts) => loadAliases().aliases.find((alias) => accepts(alias.query));
-var rememberAlias = (query, path, updatedAt) => {
-  const normalized = normalizeIntent(query);
-  if (normalized === "" || normalized.length > MAX_QUERY_LENGTH || !isAbsolute2(path) || !isProtocolSafePath(path)) return;
-  withStateLock(aliasesFile(), () => {
-    const rest = loadAliases().aliases.filter((alias) => alias.query !== normalized);
-    saveAliasesUnlocked([{ query: normalized, path, updatedAt }, ...rest].slice(0, MAX_ALIASES));
   });
 };
-var forgetAlias = (query) => {
-  const normalized = normalizeIntent(query);
-  return withStateLock(aliasesFile(), () => {
-    const db = loadAliases();
-    const kept = db.aliases.filter((alias) => alias.query !== normalized);
-    if (kept.length === db.aliases.length) return false;
-    saveAliasesUnlocked(kept);
-    return true;
-  });
+var checked = /* @__PURE__ */ new Set();
+var ready = () => {
+  const file = aliasesFile();
+  if (!checked.has(file)) {
+    migrateLegacy();
+    checked.add(file);
+  }
+  return spec;
 };
+var toIntent = (alias) => ({ query: alias.query, path: alias.value, updatedAt: alias.updatedAt });
+var loadAliases2 = () => ({ version: ALIAS_VERSION2, aliases: loadAliases(ready()).map(toIntent) });
+var findAlias2 = (query) => {
+  const found = findAlias(ready(), query);
+  return found === void 0 ? void 0 : toIntent(found);
+};
+var findAliasWhere2 = (accepts) => {
+  const found = findAliasWhere(ready(), accepts);
+  return found === void 0 ? void 0 : toIntent(found);
+};
+var rememberAlias2 = (query, path, updatedAt) => {
+  rememberAlias(ready(), query, path, updatedAt);
+};
+var forgetAlias2 = (query) => forgetAlias(ready(), query);
 
 // src/commands/alias.ts
 var MILLIS_PER_SECOND = 1e3;
@@ -542,7 +600,7 @@ var add = (args) => {
     fail(rejected);
     return EXIT.error;
   }
-  rememberAlias(input.query, input.path, Math.floor(Date.now() / MILLIS_PER_SECOND));
+  rememberAlias2(input.query, input.path, Math.floor(Date.now() / MILLIS_PER_SECOND));
   note(`cdai: "${input.query}" -> ${contractTilde(input.path)}`);
   return EXIT.ok;
 };
@@ -561,7 +619,7 @@ var forget = (args) => {
     fail("missing intent to forget", ALIAS_USAGE);
     return EXIT.error;
   }
-  if (!forgetAlias(query)) {
+  if (!forgetAlias2(query)) {
     fail(`no confirmed alias for "${query}"`);
     return EXIT.error;
   }
@@ -575,7 +633,7 @@ var runAlias = (args) => {
     return EXIT.ok;
   }
   if (command === "list" && args.length === 1) {
-    const aliases = loadAliases().aliases;
+    const aliases = loadAliases2().aliases;
     if (aliases.length === 0) note("cdai: no confirmed intent aliases");
     aliases.forEach((alias) => note(`${alias.query} -> ${contractTilde(alias.path)}`));
     return EXIT.ok;
@@ -587,7 +645,7 @@ var runAlias = (args) => {
 };
 
 // src/commands/doctor.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 
 // src/ai/backend.ts
 import { basename } from "node:path";
@@ -706,14 +764,12 @@ var aiArgs = (backend2, prompt) => {
 };
 var backendLabel = (backend2) => backend2.model === "" ? backend2.kind : `${backend2.kind} ${backend2.model}`;
 
-// src/picker.ts
+// node_modules/@franzenzenhofer/intent-core/dist/picker.js
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync as existsSync5, openSync, readSync } from "node:fs";
+import { closeSync, existsSync as existsSync6, openSync, readSync } from "node:fs";
 var TTY = "/dev/tty";
 var FZF = "fzf";
 var READ_BUFFER_BYTES = 256;
-var FZF_ARGS = ["--height=40%", "--reverse", "--prompt=cdai> "];
-var hasTty = () => existsSync5(TTY) && canOpenTty();
 var canOpenTty = () => {
   try {
     closeSync(openSync(TTY, "r"));
@@ -722,13 +778,15 @@ var canOpenTty = () => {
     return false;
   }
 };
+var hasTty = () => existsSync6(TTY) && canOpenTty();
 var pickWithFzf = (items) => {
   const input = items.map((item) => item.label).join("\n");
-  const result = spawnSync(FZF, FZF_ARGS, { input, encoding: "utf8", stdio: ["pipe", "pipe", "inherit"] });
-  if (result.status !== 0) return null;
+  const args = ["--height=40%", "--reverse", `--prompt=${product().name}> `];
+  const result = spawnSync(FZF, args, { input, encoding: "utf8", stdio: ["pipe", "pipe", "inherit"] });
+  if (result.status !== 0)
+    return null;
   const chosen = result.stdout.trim();
-  const match = items.find((item) => item.label === chosen);
-  return match?.path ?? null;
+  return items.find((item) => item.label === chosen)?.value ?? null;
 };
 var readLineFromTty = () => {
   const fd = openSync(TTY, "r");
@@ -742,10 +800,11 @@ var readLineFromTty = () => {
 };
 var pickNumbered = (items) => {
   items.forEach((item, i) => note(`  ${i + 1}) ${item.label}`));
-  process.stderr.write("cdai: pick 1-" + items.length + " (enter to abort): ");
+  process.stderr.write(`${product().name}: pick 1-${items.length} (enter to abort): `);
   const choice = Number.parseInt(readLineFromTty() ?? "", 10);
-  if (!Number.isFinite(choice) || choice < 1 || choice > items.length) return null;
-  return items[choice - 1]?.path ?? null;
+  if (!Number.isFinite(choice) || choice < 1 || choice > items.length)
+    return null;
+  return items[choice - 1]?.value ?? null;
 };
 var confirm = (question) => {
   if (!hasTty()) {
@@ -755,26 +814,28 @@ var confirm = (question) => {
   process.stderr.write(`${question} [Y/n] `);
   const answer = readLineFromTty();
   if (answer === null) {
-    note("cdai: terminal closed before answering, declined");
+    note(`${product().name}: terminal closed before answering, declined`);
     return false;
   }
   const lower = answer.toLowerCase();
   return lower === "" || lower === "y" || lower === "yes";
 };
-var toItems = (paths) => paths.map((path) => ({ path, label: contractTilde(path) }));
+var toItems = (values) => values.map((value) => ({ value, label: contractTilde(value) }));
 var pick = (items) => {
-  if (items.length === 0) return null;
+  if (items.length === 0)
+    return null;
   if (!hasTty()) {
-    note("cdai: several matches, no terminal to ask on:");
+    note(`${product().name}: several matches, no terminal to ask on:`);
     items.forEach((item) => note(`  ${item.label}`));
     return null;
   }
-  if (resolveExecutable(FZF) !== null) return pickWithFzf(items);
+  if (resolveExecutable(FZF) !== null)
+    return pickWithFzf(items);
   return pickNumbered(items);
 };
 
 // src/store/db.ts
-import { existsSync as existsSync7 } from "node:fs";
+import { existsSync as existsSync8 } from "node:fs";
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/frecency.js
 var HOUR_SECONDS = 3600;
@@ -803,18 +864,25 @@ var totalVisits = (records) => records.reduce((sum, r) => sum + r.visits, 0);
 var needsAging = (records) => totalVisits(records) > AGING_THRESHOLD;
 var applyAging = (records) => records.map((r) => ({ ...r, visits: r.visits * AGING_FACTOR })).filter((r) => r.visits >= AGING_DROP_BELOW);
 
-// src/store/db-records.ts
+// node_modules/@franzenzenhofer/intent-core/dist/store/db-records.js
 import { realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute as isAbsolute4, resolve as resolve3 } from "node:path";
 var MAX_DB_RECORDS = 1e4;
-var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var readVisitRecord = (value) => {
-  if (!isRecord4(value)) return void 0;
+var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var absolutePath = (value) => isAbsolute4(value) && isProtocolSafePath(value);
+var readVisitRecord = (value, isIdentity = absolutePath) => {
+  if (!isRecord5(value))
+    return void 0;
   const { path, realPath, visits, lastVisit } = value;
-  if (typeof path !== "string" || !isAbsolute4(path) || !isProtocolSafePath(path)) return void 0;
-  if (realPath !== void 0 && (typeof realPath !== "string" || !isAbsolute4(realPath) || !isProtocolSafePath(realPath))) return void 0;
-  if (typeof visits !== "number" || !Number.isFinite(visits) || visits <= 0) return void 0;
-  if (typeof lastVisit !== "number" || !Number.isFinite(lastVisit) || lastVisit < 0) return void 0;
+  if (typeof path !== "string" || !isIdentity(path))
+    return void 0;
+  if (realPath !== void 0 && (typeof realPath !== "string" || !isIdentity(realPath))) {
+    return void 0;
+  }
+  if (typeof visits !== "number" || !Number.isFinite(visits) || visits <= 0)
+    return void 0;
+  if (typeof lastVisit !== "number" || !Number.isFinite(lastVisit) || lastVisit < 0)
+    return void 0;
   const record = { path, visits, lastVisit };
   return typeof realPath === "string" ? { ...record, realPath } : record;
 };
@@ -844,7 +912,7 @@ var canonicalRecords = (records) => {
 // src/store/visit-claims.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import {
-  existsSync as existsSync6,
+  existsSync as existsSync7,
   readFileSync as readFileSync4,
   readdirSync as readdirSync2,
   renameSync as renameSync3,
@@ -895,7 +963,7 @@ var pendingLogs = () => {
 };
 var claimLogs = () => {
   const live = visitsLog();
-  if (existsSync6(live)) {
+  if (existsSync7(live)) {
     const claimed = join3(dataDir(), `${INGEST_PREFIX}${process.pid}.${Date.now()}.${randomUUID2()}`);
     try {
       renameSync3(live, claimed);
@@ -947,19 +1015,19 @@ var DB_VERSION = 3;
 var LEGACY_DB_VERSION = 1;
 var PREVIOUS_DB_VERSION = 2;
 var VISIT_INCREMENT = 1;
-var isRecord5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var emptyDb = () => ({ version: DB_VERSION, records: [], claimOffsets: {} });
 var loadDbState = () => {
   const file = dbFile();
-  if (!existsSync7(file)) return { db: emptyDb(), migrated: false };
+  if (!existsSync8(file)) return { db: emptyDb(), migrated: false };
   const parsed = tryReadJson(file);
-  if (!isRecord5(parsed) || !Array.isArray(parsed["records"])) return { db: emptyDb(), migrated: false };
+  if (!isRecord6(parsed) || !Array.isArray(parsed["records"])) return { db: emptyDb(), migrated: false };
   const version = parsed["version"];
   if (version !== LEGACY_DB_VERSION && version !== PREVIOUS_DB_VERSION && version !== DB_VERSION) {
     if (typeof version === "number") throw new Error(`unsupported db schema version ${String(version)}; state was not modified`);
     return { db: emptyDb(), migrated: false };
   }
-  const rawRecords = parsed["records"].map(readVisitRecord).filter((r) => r !== void 0);
+  const rawRecords = parsed["records"].map((record) => readVisitRecord(record)).filter((r) => r !== void 0);
   const records = canonicalRecords(rawRecords);
   return {
     db: {
@@ -1030,17 +1098,17 @@ var updateDb = (update) => withStateLock(dbFile(), () => {
   return next;
 });
 
-// src/store/indexer.ts
-import { existsSync as existsSync8, readdirSync as readdirSync3, realpathSync as realpathSync4, statSync as statSync5 } from "node:fs";
+// node_modules/@franzenzenhofer/intent-core/dist/store/indexer.js
+import { existsSync as existsSync9, readdirSync as readdirSync3, realpathSync as realpathSync4, statSync as statSync5 } from "node:fs";
 import { basename as basename3, join as join4 } from "node:path";
 
 // node_modules/@franzenzenhofer/intent-core/dist/store/index-schema.js
 import { realpathSync as realpathSync3 } from "node:fs";
 import { isAbsolute as isAbsolute6 } from "node:path";
 var PREVIOUS_INDEX_VERSION = 2;
-var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readStoredEntry = (value) => {
-  if (!isRecord6(value))
+  if (!isRecord7(value))
     return void 0;
   const { path, name, mtime, root, realPath } = value;
   if (typeof path !== "string" || !isAbsolute6(path) || !isProtocolSafePath(path))
@@ -1081,7 +1149,7 @@ var previousEntry = (value, roots) => {
 };
 var truncation = (value) => value === "entries" || value === "time" ? value : null;
 var parseIndex = (value, currentVersion) => {
-  if (!isRecord6(value) || !Array.isArray(value["entries"]))
+  if (!isRecord7(value) || !Array.isArray(value["entries"]))
     return void 0;
   const version = value["version"];
   if (version !== currentVersion && version !== PREVIOUS_INDEX_VERSION)
@@ -1102,8 +1170,9 @@ var parseIndex = (value, currentVersion) => {
   };
 };
 
-// src/store/indexer.ts
+// node_modules/@franzenzenhofer/intent-core/dist/store/indexer.js
 var INDEX_VERSION = 3;
+var INDEX_FILE = "index.json";
 var INDEX_TTL_MS = 60 * 60 * 1e3;
 var MAX_ENTRIES = 5e4;
 var MAX_WALK_MS = 5e3;
@@ -1117,10 +1186,12 @@ var emptyIndex = () => ({
   entries: []
 });
 var loadIndex = () => {
-  const file = indexFile();
-  if (!existsSync8(file)) return emptyIndex();
+  const file = stateFile(INDEX_FILE);
+  if (!existsSync9(file))
+    return emptyIndex();
   const loaded = parseIndex(tryReadJson(file), INDEX_VERSION);
-  if (loaded === void 0) return emptyIndex();
+  if (loaded === void 0)
+    return emptyIndex();
   if (loaded.migrated) {
     try {
       saveIndex(loaded.index);
@@ -1130,7 +1201,7 @@ var loadIndex = () => {
   return loaded.index;
 };
 var saveIndex = (index) => {
-  withStateLock(indexFile(), () => writeAtomic(indexFile(), `${JSON.stringify(index)}
+  withStateLock(stateFile(INDEX_FILE), () => writeAtomic(stateFile(INDEX_FILE), `${JSON.stringify(index)}
 `));
 };
 var isStale = (index, now) => index.generatedAt > now || now - index.generatedAt > INDEX_TTL_MS;
@@ -1179,12 +1250,16 @@ var listDirs = (dir, ignore) => {
   return entries.filter((entry) => !shouldSkip(entry.name, ignore)).map((entry) => ({ path: join4(dir, entry.name), link: entry.link })).filter((entry) => !entry.link || isDirectoryPath(entry.path)).map((entry) => entry.path);
 };
 var walk = (dir, depth, root, state) => {
-  if (depth > root.depth) return;
-  if (shouldStop(state)) return;
+  if (depth > root.depth)
+    return;
+  if (shouldStop(state))
+    return;
   for (const child of listDirs(dir, state.ignore)) {
-    if (shouldStop(state)) return;
+    if (shouldStop(state))
+      return;
     const real = canonical2(child);
-    if (real === void 0 || !isUnder(real, state.canonicalRoot) || !isProtocolSafePath(child) || !isProtocolSafePath(real) || state.seen.has(real)) continue;
+    if (real === void 0 || !isUnder(real, state.canonicalRoot) || !isProtocolSafePath(child) || !isProtocolSafePath(real) || state.seen.has(real))
+      continue;
     state.seen.add(real);
     state.entries.push({ path: child, name: basename3(child), mtime: mtimeOf(child), root: root.path, realPath: real });
     walk(child, depth + 1, root, state);
@@ -1201,9 +1276,11 @@ var buildIndex = (config, now = Date.now(), limits = DEFAULT_LIMITS) => {
     truncated: null
   };
   for (const root of config.roots) {
-    if (!existsSync8(root.path)) continue;
+    if (!existsSync9(root.path))
+      continue;
     const real = canonical2(root.path);
-    if (real === void 0) continue;
+    if (real === void 0)
+      continue;
     state.canonicalRoot = real;
     state.seen.add(real);
     walk(root.path, 1, root, state);
@@ -1223,9 +1300,7 @@ var refreshIndex = (config, now = Date.now()) => {
 };
 var childrenOf = (index, path) => {
   const prefix = `${path}/`;
-  return index.entries.filter(
-    (e) => e.path.startsWith(prefix) && !e.path.slice(prefix.length).includes("/")
-  );
+  return index.entries.filter((e) => e.path.startsWith(prefix) && !e.path.slice(prefix.length).includes("/"));
 };
 
 // src/commands/doctor.ts
@@ -1243,7 +1318,7 @@ var reportAi = (ai) => {
 var reportRoots = (config) => {
   note(`roots  ${config.roots.length}`);
   for (const root of config.roots) {
-    note(`  ${mark(existsSync9(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
+    note(`  ${mark(existsSync10(root.path))} ${contractTilde(root.path)} (depth ${root.depth})`);
   }
   reportAi(config.ai);
 };
@@ -1256,7 +1331,7 @@ var doctorArgs = (args) => {
   note("cdai: usage: cdai doctor");
   return EXIT.error;
 };
-var stateIsPrivate = () => hasPrivateMode(configDir(), true) && hasPrivateMode(dataDir(), true) && [configFile(), indexFile(), dbFile(), aliasesFile(), visitsLog()].filter(existsSync9).every((path) => hasPrivateMode(path, false));
+var stateIsPrivate = () => hasPrivateMode(configDir(), true) && hasPrivateMode(dataDir(), true) && [configFile(), indexFile(), dbFile(), aliasesFile(), visitsLog()].filter(existsSync10).every((path) => hasPrivateMode(path, false));
 var runDoctor = (args = []) => {
   const handled = doctorArgs(args);
   if (handled !== null) return handled;
@@ -1275,12 +1350,12 @@ var runDoctor = (args = []) => {
   const compatible = matchesConfig(index, config);
   const stale = isStale(index, Date.now()) || !compatible;
   const partial = index.truncated === null ? "" : ` (partial: ${index.truncated} limit)`;
-  note(`index  ${mark(existsSync9(indexFile()) && compatible)} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? " (stale)" : ""}${partial}`);
+  note(`index  ${mark(existsSync10(indexFile()) && compatible)} ${index.entries.length} dirs, ${ageMinutes}min old${stale ? " (stale)" : ""}${partial}`);
   if (!compatible) note("       run `cdai index --refresh` to rebuild the cache");
   else if (stale) note("       rebuilt on its own the next time nothing answers");
-  note(`db     ${mark(existsSync9(dbFile()))} ${loadDb().records.length} remembered paths`);
-  note(`alias  ${mark(existsSync9(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
-  note(`visits ${mark(existsSync9(visitsLog()))} ${visitsLog()}`);
+  note(`db     ${mark(existsSync10(dbFile()))} ${loadDb().records.length} remembered paths`);
+  note(`alias  ${mark(existsSync10(aliasesFile()))} ${loadAliases2().aliases.length} confirmed intents`);
+  note(`visits ${mark(existsSync10(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable("fzf") !== null)}`);
   note(`tty    ${mark(hasTty())}`);
   note(`privacy ${mark(stateIsPrivate())} private state permissions`);
@@ -1976,7 +2051,7 @@ var runComplete = (args) => {
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
   const config = loadConfig();
   const roots = completeRootNames(args, config);
-  const aliases = loadAliases().aliases.filter((alias) => isDirectory(alias.path));
+  const aliases = loadAliases2().aliases.filter((alias) => isDirectory(alias.path));
   const remembered = completeAliasWords(args, aliases, config).filter((word) => !hasUnsafeCompletionChar(word));
   const index = loadIndex();
   const indexed = matchesConfig(index, config) ? completeQuery(args, { index, db: loadDb(), cwd: process.cwd(), nowSeconds }) : [];
@@ -1991,7 +2066,7 @@ var runComplete = (args) => {
 
 // src/commands/import-zoxide.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync10 } from "node:fs";
+import { existsSync as existsSync11 } from "node:fs";
 var ZOXIDE = "zoxide";
 var ZOXIDE_ARGS = ["query", "--list", "--score"];
 var MILLIS_PER_SECOND3 = 1e3;
@@ -2023,7 +2098,7 @@ var runImportZoxide = () => {
     return EXIT.error;
   }
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND3);
-  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync10(r.path));
+  const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync11(r.path));
   updateDb((db) => {
     const byPath = new Map(db.records.map((record) => [record.path, record]));
     for (const record of imported) {
@@ -2188,7 +2263,7 @@ var ENVELOPE_KEYS = [
   "choices",
   "candidates"
 ];
-var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord8 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var parseJson = (text) => {
   try {
     return JSON.parse(text);
@@ -2223,7 +2298,7 @@ var jsonValues = (text) => {
   return values;
 };
 var directAnswer = (value) => {
-  if (!isRecord7(value) || !Object.hasOwn(value, "path")) return null;
+  if (!isRecord8(value) || !Object.hasOwn(value, "path")) return null;
   const path = value["path"];
   if (path !== null && typeof path !== "string") return null;
   const reason = value["reason"];
@@ -2234,7 +2309,7 @@ var directAnswer = (value) => {
 };
 var childrenOf2 = (value) => {
   if (Array.isArray(value)) return value;
-  if (!isRecord7(value)) return [];
+  if (!isRecord8(value)) return [];
   return ENVELOPE_KEYS.flatMap((key) => Object.hasOwn(value, key) ? [value[key]] : []);
 };
 var parseAiAnswer = (raw) => {
@@ -2379,24 +2454,24 @@ var jumpExisting = (path) => {
   return jumpKnown(path);
 };
 var aliasFor = (query) => {
-  const exact = findAlias(query.raw);
+  const exact = findAlias2(query.raw);
   if (exact !== void 0) return exact;
   const phrase = query.tokens.join(" ");
   if (phrase === "") return void 0;
-  return findAliasWhere((stored) => tokenize(stored).tokens.join(" ") === phrase);
+  return findAliasWhere2((stored) => tokenize(stored).tokens.join(" ") === phrase);
 };
 var recalledAlias = (context) => {
   const alias = aliasFor(context.query);
   if (alias === void 0) return null;
   const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
-  forgetAlias(alias.query);
+  forgetAlias2(alias.query);
   return null;
 };
 var acceptAi = (outcome, context) => {
   const label = outcome.reason === "" ? "" : ` (${outcome.reason})`;
   if (!confirm(`cdai: ${contractTilde(outcome.path)}${label}`)) return EXIT.noCd;
-  rememberAlias(context.query.raw, outcome.path, context.nowSeconds);
+  rememberAlias2(context.query.raw, outcome.path, context.nowSeconds);
   return jumpKnown(outcome.path);
 };
 var declineHeadlessAi = () => {
@@ -2495,7 +2570,7 @@ import { statSync as statSync7 } from "node:fs";
 import { basename as basename6 } from "node:path";
 
 // src/commands/detect.ts
-import { existsSync as existsSync11, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync12, readdirSync as readdirSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
 var DEV_DIR_NAMES = ["dev", "code", "src", "projects", "work", "Developer", "repos", "git"];
@@ -2529,7 +2604,7 @@ var detectRoots = (home = homedir2()) => {
   const roots = [];
   for (const name of DEV_DIR_NAMES) {
     const dir = join5(home, name);
-    if (existsSync11(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
+    if (existsSync12(dir)) roots.push({ path: dir, depth: DEV_DEPTH });
   }
   for (const cloud of cloudRoots(home)) {
     const hub = bestHub(cloud);

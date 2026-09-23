@@ -8,7 +8,7 @@ import type { ScoredCandidate } from '../match/score.js';
 import { tokenize, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
 import { contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
 import { nativeCdWords, spelledPlace } from '../match/literal.js';
-import { confirm, hasTty, pick, toItems } from '../picker.js';
+import { confirm, hasTty, pick, toItems } from '@franzenzenhofer/intent-core/picker';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
 import {
@@ -18,7 +18,7 @@ import {
   rememberAlias,
   type IntentAlias,
 } from '../store/aliases.js';
-import { loadIndex, matchesConfig, refreshIndex, type DirIndex } from '../store/indexer.js';
+import { loadIndex, matchesConfig, refreshIndex, type DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
 
 const MILLIS_PER_SECOND = 1000;
 

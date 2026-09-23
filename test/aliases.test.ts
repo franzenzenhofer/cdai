@@ -24,6 +24,21 @@ afterEach(() => {
 });
 
 describe('confirmed intent aliases', () => {
+  it('still reads aliases written before the store was shared', () => {
+    // v0.3.x wrote `path` where the shared store now writes `value`. These are a person's own
+    // remembered intents; they are converted in place, not dropped for the wrong shape.
+    const file = join(fixture.dataDir, 'aliases.json');
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      aliases: [{ query: 'that client', path: fixture.clients, updatedAt: 7 }],
+    }));
+    expect(findAlias('that client')).toEqual({
+      query: 'that client', path: fixture.clients, updatedAt: 7,
+    });
+    const rewritten = JSON.parse(readFileSync(file, 'utf8')) as { aliases: { value: string }[] };
+    expect(rewritten.aliases[0]?.value).toBe(fixture.clients);
+  });
+
   it('normalizes, replaces, and forgets exact intent locally', () => {
     expect(normalizeIntent('  That   CLIENT With Flowers ')).toBe('that client with flowers');
     rememberAlias('That CLIENT with flowers', fixture.clients, 1);

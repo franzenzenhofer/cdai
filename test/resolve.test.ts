@@ -7,7 +7,7 @@ import { buildCandidates, collapseChains, decide, looseCandidates, resolveQuery,
 import type { ScoredCandidate } from '../src/match/score.js';
 import { tokenize } from '../src/match/tokenize.js';
 import { emptyDb, type Db } from '../src/store/db.js';
-import { buildIndex } from '../src/store/indexer.js';
+import { buildIndex } from '@franzenzenhofer/intent-core/store/indexer';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
 let fixture: Fixture;

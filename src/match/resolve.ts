@@ -8,8 +8,8 @@ import {
   type ScoredCandidate,
 } from './score.js';
 import { pathReading, urlReadings, type ParsedQuery } from './tokenize.js';
-import type { DirIndex } from '../store/indexer.js';
-import { childrenOf } from '../store/indexer.js';
+import type { DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
+import { childrenOf } from '@franzenzenhofer/intent-core/store/indexer';
 import type { Db } from '../store/db.js';
 import { frecency } from '@franzenzenhofer/intent-core/store/frecency';
 import { PathChainSet } from '@franzenzenhofer/intent-core/match/path-trie';

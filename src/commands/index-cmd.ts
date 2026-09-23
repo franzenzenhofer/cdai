@@ -1,7 +1,7 @@
 import { loadConfig } from '../config.js';
 import { contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
-import { isStale, loadIndex, matchesConfig, refreshIndex } from '../store/indexer.js';
+import { isStale, loadIndex, matchesConfig, refreshIndex } from '@franzenzenhofer/intent-core/store/indexer';
 
 const MILLIS_PER_MINUTE = 60_000;
 export const INDEX_USAGE = 'usage: cdai index [--refresh]';

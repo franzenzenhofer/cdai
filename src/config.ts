@@ -26,24 +26,17 @@ export const DEFAULT_AI = {
 
 const MAX_TIMER_MS = 2_147_483_647;
 
-export interface RootConfig {
-  readonly path: string;
-  readonly depth: number;
-}
-
-export interface AiConfig {
-  readonly enabled: boolean;
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly model: string;
-  readonly timeoutMs: number;
-}
+export type { RootConfig } from '@franzenzenhofer/intent-core/store/indexer';
+export type { AiConfig } from '@franzenzenhofer/intent-core/ai/backend';
 
 export interface Config {
   readonly roots: readonly RootConfig[];
   readonly ignore: readonly string[];
   readonly ai: AiConfig;
 }
+
+import type { RootConfig } from '@franzenzenhofer/intent-core/store/indexer';
+import type { AiConfig } from '@franzenzenhofer/intent-core/ai/backend';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);

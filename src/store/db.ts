@@ -4,7 +4,7 @@ import { writeAtomic } from '@franzenzenhofer/intent-core/paths';
 import { dbFile } from '../state.js';
 import { applyAging, needsAging, type VisitRecord } from '@franzenzenhofer/intent-core/store/frecency';
 import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
-import { boundedRecords, canonicalPath, canonicalRecords, readVisitRecord } from './db-records.js';
+import { boundedRecords, canonicalPath, canonicalRecords, readVisitRecord } from '@franzenzenhofer/intent-core/store/db-records';
 import {
   claimLogs,
   legacyClaimOffsets,
@@ -15,7 +15,7 @@ import {
   type Visit,
 } from './visit-claims.js';
 export { parseVisitLines, type Visit } from './visit-claims.js';
-export { MAX_DB_RECORDS } from './db-records.js';
+export { MAX_DB_RECORDS } from '@franzenzenhofer/intent-core/store/db-records';
 
 const DB_VERSION = 3;
 const LEGACY_DB_VERSION = 1;
@@ -50,7 +50,9 @@ const loadDbState = (): DbState => {
     return { db: emptyDb(), migrated: false };
   }
   const rawRecords = parsed['records']
-    .map(readVisitRecord)
+    // A visit is recorded against an absolute path here; passing the record straight to `map`
+    // would hand the array index in as the identity test.
+    .map((record) => readVisitRecord(record))
     .filter((r): r is VisitRecord => r !== undefined);
   const records = canonicalRecords(rawRecords);
   return {

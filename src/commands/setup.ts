@@ -11,9 +11,9 @@ import {
   type RootConfig,
 } from '../config.js';
 import { absolutize, configFile, contractTilde } from '@franzenzenhofer/intent-core/paths';
-import { confirm, hasTty } from '../picker.js';
+import { confirm, hasTty } from '@franzenzenhofer/intent-core/picker';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
-import { refreshIndex } from '../store/indexer.js';
+import { refreshIndex } from '@franzenzenhofer/intent-core/store/indexer';
 import { detectRoots } from './detect.js';
 import { parseSetupOptions, SETUP_USAGE, type SetupOptions } from './setup-options.js';
 

@@ -4,11 +4,11 @@ import { configExists, loadConfig, type AiConfig, type Config } from '../config.
 import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { configDir, configFile, contractTilde, dataDir, hasPrivateMode } from '@franzenzenhofer/intent-core/paths';
 import { aliasesFile, dbFile, indexFile, visitsLog } from '../state.js';
-import { hasTty } from '../picker.js';
+import { hasTty } from '@franzenzenhofer/intent-core/picker';
 import { EXIT, note, type ExitCode } from '../protocol.js';
 import { loadDb } from '../store/db.js';
 import { loadAliases } from '../store/aliases.js';
-import { isStale, loadIndex, matchesConfig } from '../store/indexer.js';
+import { isStale, loadIndex, matchesConfig } from '@franzenzenhofer/intent-core/store/indexer';
 
 const MILLIS_PER_MINUTE = 60_000;
 const mark = (ok: boolean): string => (ok ? 'ok  ' : 'miss');

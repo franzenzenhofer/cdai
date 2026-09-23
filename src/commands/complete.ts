@@ -10,7 +10,7 @@ import { STOPWORDS } from '../match/constants.js';
 import { EXIT, type ExitCode } from '../protocol.js';
 import { loadConfig } from '../config.js';
 import { loadDb } from '../store/db.js';
-import { loadIndex, matchesConfig } from '../store/indexer.js';
+import { loadIndex, matchesConfig } from '@franzenzenhofer/intent-core/store/indexer';
 import { CLI_CONTROLS, stripCdOptions } from '../shell/control.js';
 import { loadAliases } from '../store/aliases.js';
 import { isDirectory } from '@franzenzenhofer/intent-core/paths';
