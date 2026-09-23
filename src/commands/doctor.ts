@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { backendLabel, resolveAiBackend } from '../ai/backend.js';
 import { configExists, loadConfig, type AiConfig, type Config } from '../config.js';
-import { resolveExecutable } from '../executable.js';
-import { aliasesFile, configDir, configFile, contractTilde, dataDir, dbFile, hasPrivateMode, indexFile, visitsLog } from '../paths.js';
+import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
+import { configDir, configFile, contractTilde, dataDir, hasPrivateMode } from '@franzenzenhofer/intent-core/paths';
+import { aliasesFile, dbFile, indexFile, visitsLog } from '../state.js';
 import { hasTty } from '../picker.js';
 import { EXIT, note, type ExitCode } from '../protocol.js';
 import { loadDb } from '../store/db.js';

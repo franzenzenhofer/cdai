@@ -1,5 +1,5 @@
 import { loadConfig } from '../config.js';
-import { contractTilde } from '../paths.js';
+import { contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
 import { isStale, loadIndex, matchesConfig, refreshIndex } from '../store/indexer.js';
 

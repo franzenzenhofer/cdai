@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
-import { resolveExecutable } from './executable.js';
-import { contractTilde } from './paths.js';
+import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
+import { contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { note } from './protocol.js';
 
 const TTY = '/dev/tty';

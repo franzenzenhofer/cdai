@@ -1,5 +1,19 @@
 import { CD_MAX_NATIVE_ARGS } from '../shell/control.js';
-import { absolutize, fileUrlPath, isDirectory, isPathShaped, spelledDirectory } from '../paths.js';
+import {
+  absolutize, dirOf, fileUrlPath, isDirectory, isFile, isPathShaped, spelledPath,
+} from '@franzenzenhofer/intent-core/paths';
+
+/**
+ * A place, out of a word that spells one. cdai only ever answers with a directory, so a
+ * spelled-out FILE means the directory that holds it - which is the difference between this
+ * and the shared primitive it is built on.
+ */
+const spelledDirectory = (word: string): string | null => {
+  const path = spelledPath(word);
+  if (path === null) return null;
+  if (isDirectory(path)) return path;
+  return isFile(path) ? dirOf(path) : null;
+};
 
 /** The one thing a lone argument can name outright: an existing directory, spelled either way. */
 const namedDirectory = (args: readonly string[]): string | null => {

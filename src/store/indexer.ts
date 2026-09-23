@@ -1,10 +1,11 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { tryReadJson } from '../json.js';
-import { indexFile, isProtocolSafePath, isUnder, writeAtomic } from '../paths.js';
+import { tryReadJson } from '@franzenzenhofer/intent-core/json';
+import { isProtocolSafePath, isUnder, writeAtomic } from '@franzenzenhofer/intent-core/paths';
+import { indexFile } from '../state.js';
 import type { Config, RootConfig } from '../config.js';
-import { withStateLock } from './lock.js';
-import { parseIndex } from './index-schema.js';
+import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
+import { parseIndex } from '@franzenzenhofer/intent-core/store/index-schema';
 
 const INDEX_VERSION = 3;
 export const INDEX_TTL_MS = 60 * 60 * 1000;

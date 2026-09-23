@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { resolveExecutable } from '../src/executable.js';
+import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
 const REPO = process.cwd();

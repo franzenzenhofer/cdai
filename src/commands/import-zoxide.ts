@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolveExecutable } from '../executable.js';
+import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
 import { updateDb } from '../store/db.js';
-import { DAY_SECONDS, type VisitRecord } from '../store/frecency.js';
+import { DAY_SECONDS, type VisitRecord } from '@franzenzenhofer/intent-core/store/frecency';
 
 const ZOXIDE = 'zoxide';
 const ZOXIDE_ARGS = ['query', '--list', '--score'];

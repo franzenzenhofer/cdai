@@ -1,4 +1,4 @@
-import { dataDir } from '../paths.js';
+import { dataDir } from '@franzenzenhofer/intent-core/paths';
 import { EXIT } from '../protocol.js';
 import {
   CLI_CONTROL_PATTERN,

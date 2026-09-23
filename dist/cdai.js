@@ -1,52 +1,73 @@
 #!/usr/bin/env node
 
+// node_modules/@franzenzenhofer/intent-core/dist/product.js
+var current = null;
+var setProduct = (product2) => {
+  current = product2;
+};
+var product = () => {
+  if (current === null)
+    throw new Error("intent-core: setProduct() was never called");
+  return current;
+};
+var productEnv = (suffix) => {
+  const value = process.env[`${product().envPrefix}_${suffix}`];
+  return value === void 0 || value === "" ? void 0 : value;
+};
+
 // src/config.ts
 import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
 
-// src/paths.ts
+// node_modules/@franzenzenhofer/intent-core/dist/paths.js
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, sep } from "node:path";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
-var APP_NAME = "cdai";
 var TMP_SUFFIX = ".tmp";
 var PRIVATE_FILE_MODE = 384;
 var PRIVATE_DIR_MODE = 448;
 var PRIVATE_MASK = 63;
 var configDir = () => {
-  const override = process.env["CDAI_CONFIG_DIR"];
-  if (override !== void 0 && override !== "") return resolve(expandTilde(override));
+  const override = productEnv("CONFIG_DIR");
+  if (override !== void 0)
+    return resolve(expandTilde(override));
   const xdg = process.env["XDG_CONFIG_HOME"];
-  if (xdg !== void 0 && xdg !== "") return join(xdg, APP_NAME);
-  return join(homedir(), ".config", APP_NAME);
+  if (xdg !== void 0 && xdg !== "")
+    return join(xdg, product().name);
+  return join(homedir(), ".config", product().name);
 };
 var dataDir = () => {
-  const override = process.env["CDAI_DATA_DIR"];
-  if (override !== void 0 && override !== "") return resolve(expandTilde(override));
+  const override = productEnv("DATA_DIR");
+  if (override !== void 0)
+    return resolve(expandTilde(override));
   const xdg = process.env["XDG_DATA_HOME"];
-  if (xdg !== void 0 && xdg !== "") return join(xdg, APP_NAME);
-  return join(homedir(), ".local", "share", APP_NAME);
+  if (xdg !== void 0 && xdg !== "")
+    return join(xdg, product().name);
+  return join(homedir(), ".local", "share", product().name);
 };
 var configFile = () => join(configDir(), "config.json");
-var dbFile = () => join(dataDir(), "db.json");
-var indexFile = () => join(dataDir(), "index.json");
-var aliasesFile = () => join(dataDir(), "aliases.json");
-var visitsLog = () => join(dataDir(), "visits.log");
+var stateFile = (name) => join(dataDir(), name);
 var expandTilde = (input) => {
-  if (input === "~") return homedir();
-  if (input.startsWith(`~${sep}`)) return join(homedir(), input.slice(2));
+  if (input === "~")
+    return homedir();
+  if (input.startsWith(`~${sep}`))
+    return join(homedir(), input.slice(2));
   return input;
 };
 var contractTilde = (input) => {
   const home = homedir();
-  if (input === home) return "~";
-  if (input.startsWith(home + sep)) return `~${sep}${input.slice(home.length + 1)}`;
+  if (input === home)
+    return "~";
+  if (input.startsWith(home + sep))
+    return `~${sep}${input.slice(home.length + 1)}`;
   return input;
 };
 var fileUrlPath = (input) => {
-  if (!/^file:\/\//iu.test(input)) return null;
+  if (!/^file:\/\//iu.test(input))
+    return null;
   try {
     const url = new URL(input);
-    if (url.hostname !== "" && url.hostname !== "localhost") return null;
+    if (url.hostname !== "" && url.hostname !== "localhost")
+      return null;
     return decodeURIComponent(url.pathname);
   } catch {
     return null;
@@ -56,21 +77,21 @@ var absolutize = (input) => {
   const expanded = expandTilde(input);
   return isAbsolute(expanded) ? resolve(expanded) : resolve(process.cwd(), expanded);
 };
+var dirOf = (file) => {
+  const idx = file.lastIndexOf(sep);
+  return idx <= 0 ? sep : file.slice(0, idx);
+};
 var ensureDir = (dir) => {
   mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   tightenMode(dir, PRIVATE_DIR_MODE);
 };
 var writeAtomic = (file, contents) => {
-  ensureDir(dirname(file));
+  ensureDir(dirOf(file));
   const tmp = `${file}.${process.pid}${TMP_SUFFIX}`;
   const mode = privateMode(file, PRIVATE_FILE_MODE);
   writeFileSync(tmp, contents, { encoding: "utf8", mode });
   chmodSync(tmp, mode);
   renameSync(tmp, file);
-};
-var dirname = (file) => {
-  const idx = file.lastIndexOf(sep);
-  return idx <= 0 ? sep : file.slice(0, idx);
 };
 var isUnder = (child, parent) => {
   const c = resolve(child);
@@ -102,18 +123,17 @@ var isFile = (path) => {
 var PATH_SHAPED = /^~|\//u;
 var REMOTE_URL = /^(?!file:\/\/)[a-z][a-z0-9+.-]*:\/\//iu;
 var isPathShaped = (word) => fileUrlPath(word) !== null || !REMOTE_URL.test(word) && PATH_SHAPED.test(word);
-var spelledDirectory = (word) => {
+var spelledPath = (word) => {
   const fileUrl = fileUrlPath(word);
-  if (fileUrl === null && (REMOTE_URL.test(word) || !PATH_SHAPED.test(word))) return null;
-  const path = absolutize(fileUrl ?? word);
-  if (isDirectory(path)) return path;
-  return isFile(path) ? dirname(path) : null;
+  if (fileUrl === null && (REMOTE_URL.test(word) || !PATH_SHAPED.test(word)))
+    return null;
+  return absolutize(fileUrl ?? word);
 };
 var isProtocolSafePath = (path) => !/[\r\n]/u.test(path);
 var privateMode = (path, fallback) => {
   try {
-    const current = statSync(path).mode & 511;
-    const privateCurrent = current & ~PRIVATE_MASK;
+    const current2 = statSync(path).mode & 511;
+    const privateCurrent = current2 & ~PRIVATE_MASK;
     return privateCurrent === 0 ? fallback : privateCurrent;
   } catch {
     return fallback;
@@ -121,53 +141,52 @@ var privateMode = (path, fallback) => {
 };
 var tightenMode = (path, fallback) => {
   try {
-    if (lstatSync(path).isSymbolicLink()) return;
+    if (lstatSync(path).isSymbolicLink())
+      return;
     chmodSync(path, privateMode(path, fallback));
   } catch {
   }
 };
+var entriesOf = (dir) => {
+  try {
+    return readdirSync(dir).map((name) => join(dir, name));
+  } catch {
+    return [];
+  }
+};
 var secureExistingState = () => {
   const dirs = [configDir(), dataDir()];
-  let claims = [];
-  try {
-    claims = readdirSync(dataDir()).filter((name) => name.startsWith("visits.log.ingest.")).map((name) => join(dataDir(), name));
-  } catch {
-  }
-  const files = [configFile(), dbFile(), indexFile(), aliasesFile(), visitsLog(), ...claims];
   dirs.filter(existsSync).forEach((path) => tightenMode(path, PRIVATE_DIR_MODE));
-  files.filter(existsSync).forEach((path) => tightenMode(path, PRIVATE_FILE_MODE));
+  dirs.flatMap(entriesOf).forEach((path) => tightenMode(path, isDirectory(path) ? PRIVATE_DIR_MODE : PRIVATE_FILE_MODE));
 };
 var hasPrivateMode = (path, directory) => {
   try {
+    const mode = statSync(path).mode;
     const expected = directory ? PRIVATE_DIR_MODE : PRIVATE_FILE_MODE;
-    return (statSync(path).mode & PRIVATE_MASK) === 0 && (statSync(path).mode & expected) !== 0;
+    return (mode & PRIVATE_MASK) === 0 && (mode & expected) !== 0;
   } catch {
     return false;
   }
 };
 
-// src/store/lock.ts
-import {
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync2,
-  readFileSync,
-  renameSync as renameSync2,
-  rmSync,
-  statSync as statSync2,
-  writeFileSync as writeFileSync2
-} from "node:fs";
+// node_modules/@franzenzenhofer/intent-core/dist/store/lock.js
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync, renameSync as renameSync2, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname as dirname2 } from "node:path";
+import { dirname } from "node:path";
 var LOCK_WAIT_MS = 5;
 var LOCK_TIMEOUT_MS = 5e3;
 var INVALID_LOCK_GRACE_MS = 3e4;
 var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var parseLockOwner = (value) => {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value))
+    return null;
   const { pid, token, createdAt } = value;
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  if (typeof token !== "string" || token === "") return null;
-  if (!Number.isSafeInteger(createdAt) || createdAt < 0) return null;
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    return null;
+  if (typeof token !== "string" || token === "")
+    return null;
+  if (!Number.isSafeInteger(createdAt) || createdAt < 0)
+    return null;
   return { pid, token, createdAt };
 };
 var readOwner = (ownerFile) => {
@@ -194,7 +213,8 @@ var ageOf = (path, now) => {
 };
 var canReclaim = (lockDir, ownerFile, now) => {
   const owner = readOwner(ownerFile);
-  if (owner !== null) return !processIsAlive(owner.pid);
+  if (owner !== null)
+    return !processIsAlive(owner.pid);
   return ageOf(lockDir, now) > INVALID_LOCK_GRACE_MS;
 };
 var pause = () => {
@@ -208,7 +228,8 @@ var quarantine = (lockDir) => {
   try {
     renameSync2(lockDir, retired);
   } catch (error) {
-    if (isMissing(error)) return false;
+    if (isMissing(error))
+      return false;
     throw error;
   }
   rmSync(retired, { recursive: true, force: true });
@@ -221,16 +242,20 @@ var claimMarker = (marker) => {
       writeFileSync2(marker, JSON.stringify(claimant), { encoding: "utf8", mode: 384, flag: "wx" });
       return claimant;
     } catch (error) {
-      if (isMissing(error)) return null;
-      if (!isAlreadyExists(error)) throw error;
+      if (isMissing(error))
+        return null;
+      if (!isAlreadyExists(error))
+        throw error;
       const holder = readOwner(marker);
-      if (holder !== null && processIsAlive(holder.pid)) return null;
+      if (holder !== null && processIsAlive(holder.pid))
+        return null;
       const retired = `${marker}.trash.${process.pid}.${randomUUID()}`;
       try {
         renameSync2(marker, retired);
         rmSync(retired, { force: true });
       } catch (renameError) {
-        if (!isMissing(renameError)) throw renameError;
+        if (!isMissing(renameError))
+          throw renameError;
       }
     }
   }
@@ -238,27 +263,34 @@ var claimMarker = (marker) => {
 var tryReclaim = (lockDir, ownerFile, now) => {
   const marker = `${lockDir}/reclaim`;
   const claimant = claimMarker(marker);
-  if (claimant === null) return false;
+  if (claimant === null)
+    return false;
   if (readOwner(marker)?.token === claimant.token && canReclaim(lockDir, ownerFile, now)) {
     return quarantine(lockDir);
   }
-  if (readOwner(marker)?.token === claimant.token) rmSync(marker, { force: true });
+  if (readOwner(marker)?.token === claimant.token)
+    rmSync(marker, { force: true });
   return false;
 };
 var release = (lockDir, ownerFile, token) => {
-  if (readOwner(ownerFile)?.token !== token) return;
+  if (readOwner(ownerFile)?.token !== token)
+    return;
   quarantine(lockDir);
 };
 var acquire = (context) => {
-  const { stateFile, lockDir, ownerFile, started, owner } = context;
+  const { stateFile: stateFile2, lockDir, ownerFile, started, owner } = context;
   while (true) {
     try {
       mkdirSync2(lockDir, { mode: 448 });
     } catch (error) {
-      if (!isAlreadyExists(error)) throw error;
-      if (!existsSync2(lockDir)) continue;
-      if (canReclaim(lockDir, ownerFile, Date.now())) tryReclaim(lockDir, ownerFile, Date.now());
-      if (Date.now() - started >= LOCK_TIMEOUT_MS) throw new Error(`state is busy: ${stateFile}`);
+      if (!isAlreadyExists(error))
+        throw error;
+      if (!existsSync2(lockDir))
+        continue;
+      if (canReclaim(lockDir, ownerFile, Date.now()))
+        tryReclaim(lockDir, ownerFile, Date.now());
+      if (Date.now() - started >= LOCK_TIMEOUT_MS)
+        throw new Error(`state is busy: ${stateFile2}`);
       pause();
       continue;
     }
@@ -271,13 +303,13 @@ var acquire = (context) => {
     }
   }
 };
-var withStateLock = (stateFile, action) => {
-  const lockDir = `${stateFile}.lock`;
+var withStateLock = (stateFile2, action) => {
+  const lockDir = `${stateFile2}.lock`;
   const ownerFile = `${lockDir}/owner.json`;
   const started = Date.now();
   const owner = { pid: process.pid, token: randomUUID(), createdAt: started };
-  ensureDir(dirname2(stateFile));
-  acquire({ stateFile, lockDir, ownerFile, started, owner });
+  ensureDir(dirname(stateFile2));
+  acquire({ stateFile: stateFile2, lockDir, ownerFile, started, owner });
   try {
     return action();
   } finally {
@@ -355,6 +387,22 @@ var saveConfig = (config) => {
 `));
 };
 
+// node_modules/@franzenzenhofer/intent-core/dist/protocol.js
+var emit = (line) => {
+  process.stdout.write(`${line}
+`);
+};
+var note = (message) => {
+  process.stderr.write(`${message}
+`);
+};
+var fail = (message, hint) => {
+  const prefix = product().name;
+  note(`${prefix}: ${message}`);
+  if (hint !== void 0)
+    note(`${" ".repeat(prefix.length + 2)}${hint}`);
+};
+
 // src/protocol.ts
 var EXIT = {
   /** A path was printed on stdout, the shell function should cd to it. */
@@ -370,27 +418,18 @@ var EXIT = {
   native: 4
 };
 var emitPath = (path) => {
-  process.stdout.write(`${path}
-`);
-};
-var note = (message) => {
-  process.stderr.write(`${message}
-`);
+  emit(path);
 };
 var jump = (path) => {
   note(`\u2192 ${contractTilde(path)}`);
   emitPath(path);
-};
-var fail = (message, hint) => {
-  note(`cdai: ${message}`);
-  if (hint !== void 0) note(`      ${hint}`);
 };
 
 // src/store/aliases.ts
 import { existsSync as existsSync4 } from "node:fs";
 import { isAbsolute as isAbsolute2 } from "node:path";
 
-// src/json.ts
+// node_modules/@franzenzenhofer/intent-core/dist/json.js
 import { readFileSync as readFileSync3 } from "node:fs";
 var tryReadJson = (file) => {
   try {
@@ -399,6 +438,12 @@ var tryReadJson = (file) => {
     return void 0;
   }
 };
+
+// src/state.ts
+var dbFile = () => stateFile("db.json");
+var indexFile = () => stateFile("index.json");
+var aliasesFile = () => stateFile("aliases.json");
+var visitsLog = () => stateFile("visits.log");
 
 // src/store/aliases.ts
 var ALIAS_VERSION = 1;
@@ -547,7 +592,7 @@ import { existsSync as existsSync9 } from "node:fs";
 // src/ai/backend.ts
 import { basename } from "node:path";
 
-// src/executable.ts
+// node_modules/@franzenzenhofer/intent-core/dist/executable.js
 import { accessSync, constants, statSync as statSync3 } from "node:fs";
 import { delimiter, isAbsolute as isAbsolute3, join as join2, resolve as resolve2, sep as sep2 } from "node:path";
 var isExecutableFile = (path) => {
@@ -559,14 +604,16 @@ var isExecutableFile = (path) => {
   }
 };
 var resolveExecutable = (command) => {
-  if (command.trim() === "") return null;
+  if (command.trim() === "")
+    return null;
   if (isAbsolute3(command) || command.includes(sep2)) {
     const path = resolve2(command);
     return isExecutableFile(path) ? path : null;
   }
   for (const dir of (process.env["PATH"] ?? "").split(delimiter)) {
     const candidate = join2(dir === "" ? process.cwd() : dir, command);
-    if (isExecutableFile(candidate)) return candidate;
+    if (isExecutableFile(candidate))
+      return candidate;
   }
   return null;
 };
@@ -729,7 +776,7 @@ var pick = (items) => {
 // src/store/db.ts
 import { existsSync as existsSync7 } from "node:fs";
 
-// src/store/frecency.ts
+// node_modules/@franzenzenhofer/intent-core/dist/store/frecency.js
 var HOUR_SECONDS = 3600;
 var DAY_SECONDS = 86400;
 var WEEK_SECONDS = 604800;
@@ -743,9 +790,12 @@ var AGING_THRESHOLD = 9e3;
 var AGING_FACTOR = 0.9;
 var AGING_DROP_BELOW = 1;
 var ageWeight = (ageSeconds) => {
-  if (ageSeconds < HOUR_SECONDS) return AGE_WEIGHT.withinHour;
-  if (ageSeconds < DAY_SECONDS) return AGE_WEIGHT.withinDay;
-  if (ageSeconds < WEEK_SECONDS) return AGE_WEIGHT.withinWeek;
+  if (ageSeconds < HOUR_SECONDS)
+    return AGE_WEIGHT.withinHour;
+  if (ageSeconds < DAY_SECONDS)
+    return AGE_WEIGHT.withinDay;
+  if (ageSeconds < WEEK_SECONDS)
+    return AGE_WEIGHT.withinWeek;
   return AGE_WEIGHT.older;
 };
 var frecency = (record, nowSeconds) => record.visits * ageWeight(Math.max(0, nowSeconds - record.lastVisit));
@@ -984,19 +1034,25 @@ var updateDb = (update) => withStateLock(dbFile(), () => {
 import { existsSync as existsSync8, readdirSync as readdirSync3, realpathSync as realpathSync4, statSync as statSync5 } from "node:fs";
 import { basename as basename3, join as join4 } from "node:path";
 
-// src/store/index-schema.ts
+// node_modules/@franzenzenhofer/intent-core/dist/store/index-schema.js
 import { realpathSync as realpathSync3 } from "node:fs";
 import { isAbsolute as isAbsolute6 } from "node:path";
 var PREVIOUS_INDEX_VERSION = 2;
 var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var readStoredEntry = (value) => {
-  if (!isRecord6(value)) return void 0;
+  if (!isRecord6(value))
+    return void 0;
   const { path, name, mtime, root, realPath } = value;
-  if (typeof path !== "string" || !isAbsolute6(path) || !isProtocolSafePath(path)) return void 0;
-  if (typeof name !== "string" || name === "" || !isProtocolSafePath(name)) return void 0;
-  if (typeof root !== "string" || !isAbsolute6(root)) return void 0;
-  if (typeof mtime !== "number" || !Number.isFinite(mtime) || mtime < 0) return void 0;
-  if (realPath !== void 0 && (typeof realPath !== "string" || !isAbsolute6(realPath) || !isProtocolSafePath(realPath))) return void 0;
+  if (typeof path !== "string" || !isAbsolute6(path) || !isProtocolSafePath(path))
+    return void 0;
+  if (typeof name !== "string" || name === "" || !isProtocolSafePath(name))
+    return void 0;
+  if (typeof root !== "string" || !isAbsolute6(root))
+    return void 0;
+  if (typeof mtime !== "number" || !Number.isFinite(mtime) || mtime < 0)
+    return void 0;
+  if (realPath !== void 0 && (typeof realPath !== "string" || !isAbsolute6(realPath) || !isProtocolSafePath(realPath)))
+    return void 0;
   const base = { path, name, mtime, root };
   return realPath === void 0 ? base : { ...base, realPath };
 };
@@ -1013,18 +1069,23 @@ var canonical = (path) => {
 };
 var previousEntry = (value, roots) => {
   const entry = readStoredEntry(value);
-  if (entry === void 0) return void 0;
-  if (!roots.has(entry.root)) roots.set(entry.root, canonical(entry.root));
+  if (entry === void 0)
+    return void 0;
+  if (!roots.has(entry.root))
+    roots.set(entry.root, canonical(entry.root));
   const realRoot = roots.get(entry.root);
   const realPath = canonical(entry.path);
-  if (realRoot === void 0 || realPath === void 0 || !isUnder(realPath, realRoot)) return void 0;
+  if (realRoot === void 0 || realPath === void 0 || !isUnder(realPath, realRoot))
+    return void 0;
   return { ...entry, realPath };
 };
 var truncation = (value) => value === "entries" || value === "time" ? value : null;
 var parseIndex = (value, currentVersion) => {
-  if (!isRecord6(value) || !Array.isArray(value["entries"])) return void 0;
+  if (!isRecord6(value) || !Array.isArray(value["entries"]))
+    return void 0;
   const version = value["version"];
-  if (version !== currentVersion && version !== PREVIOUS_INDEX_VERSION) return void 0;
+  if (version !== currentVersion && version !== PREVIOUS_INDEX_VERSION)
+    return void 0;
   const roots = /* @__PURE__ */ new Map();
   const reader = version === currentVersion ? currentEntry : (entry) => previousEntry(entry, roots);
   const generatedAt = value["generatedAt"];
@@ -1227,7 +1288,7 @@ var runDoctor = (args = []) => {
 };
 
 // src/match/resolve.ts
-import { basename as basename4, dirname as dirname3 } from "node:path";
+import { basename as basename4, dirname as dirname2 } from "node:path";
 
 // src/match/constants.ts
 var SCORE = {
@@ -1637,32 +1698,34 @@ var tokenize = (input) => {
 };
 var tokenizeArgs = (args) => tokenize(args.join(" "));
 
-// src/match/path-trie.ts
+// node_modules/@franzenzenhofer/intent-core/dist/match/path-trie.js
 var node = () => ({ terminal: false, children: /* @__PURE__ */ new Map() });
 var segments = (path) => path.split("/").filter((part) => part !== "");
 var PathChainSet = class {
   #root = node();
   hasChain(path) {
-    let current = this.#root;
+    let current2 = this.#root;
     for (const part of segments(path)) {
-      if (current.terminal) return true;
-      const next = current.children.get(part);
-      if (next === void 0) return false;
-      current = next;
+      if (current2.terminal)
+        return true;
+      const next = current2.children.get(part);
+      if (next === void 0)
+        return false;
+      current2 = next;
     }
-    return current.terminal || current.children.size > 0;
+    return current2.terminal || current2.children.size > 0;
   }
   add(path) {
-    let current = this.#root;
+    let current2 = this.#root;
     for (const part of segments(path)) {
-      let next = current.children.get(part);
+      let next = current2.children.get(part);
       if (next === void 0) {
         next = node();
-        current.children.set(part, next);
+        current2.children.set(part, next);
       }
-      current = next;
+      current2 = next;
     }
-    current.terminal = true;
+    current2.terminal = true;
   }
 };
 
@@ -1698,10 +1761,10 @@ var collapseChains = (ranked) => {
 var dropDescendants = (ranked) => {
   const paths = new Set(ranked.map((r) => r.candidate.path));
   return ranked.filter((scored) => {
-    let parent = dirname3(scored.candidate.path);
+    let parent = dirname2(scored.candidate.path);
     while (parent.length > 1) {
       if (paths.has(parent)) return false;
-      parent = dirname3(parent);
+      parent = dirname2(parent);
     }
     return true;
   });
@@ -2261,6 +2324,12 @@ var buildAiRequest = (input) => {
 };
 
 // src/match/literal.ts
+var spelledDirectory = (word) => {
+  const path = spelledPath(word);
+  if (path === null) return null;
+  if (isDirectory(path)) return path;
+  return isFile(path) ? dirOf(path) : null;
+};
 var namedDirectory = (args) => {
   const first = args.length === 1 ? args[0] : void 0;
   if (first === void 0) return null;
@@ -3246,6 +3315,7 @@ var package_default = {
   },
   devDependencies: {
     "@eslint/js": "^9.39.0",
+    "@franzenzenhofer/intent-core": "github:franzenzenhofer/intent-core#0e9e9dd34b344a089764086991e23b3b6a30cfde",
     "@types/node": "^22.18.0",
     "@typescript-eslint/eslint-plugin": "^8.46.0",
     "@typescript-eslint/parser": "^8.46.0",
@@ -3259,6 +3329,7 @@ var package_default = {
 };
 
 // src/cli.ts
+setProduct({ name: "cdai", envPrefix: "CDAI" });
 var VERSION = package_default.version;
 var USAGE = [
   "cdai - cd with intent",

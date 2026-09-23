@@ -1,4 +1,4 @@
-import { dataDir } from '../paths.js';
+import { dataDir } from '@franzenzenhofer/intent-core/paths';
 import { EXIT } from '../protocol.js';
 import {
   BASH_PORTABLE_CD_FLAG_CHARS,

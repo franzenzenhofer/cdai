@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setProduct } from '@franzenzenhofer/intent-core/product';
 
 const UNREADABLE_MODE = 0o000;
 const READABLE_MODE = 0o755;
@@ -57,6 +58,7 @@ export const CLIENT_DIRS = [
 
 /** Real directories on disk, no mock filesystem anywhere in this suite. */
 export const makeFixture = (): Fixture => {
+  setProduct({ name: 'cdai', envPrefix: 'CDAI' });
   const rootDir = mkdtempSync(join(tmpdir(), 'cdai-test-'));
   const projects = join(rootDir, 'dev');
   const clients = join(rootDir, 'clients');

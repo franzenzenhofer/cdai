@@ -9,7 +9,8 @@ import {
   utimesSync,
 } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
-import { dataDir, ensureDir, isProtocolSafePath, visitsLog } from '../paths.js';
+import { dataDir, ensureDir, isProtocolSafePath } from '@franzenzenhofer/intent-core/paths';
+import { visitsLog } from '../state.js';
 
 export const INGEST_PREFIX = 'visits.log.ingest.';
 const FIELD_SEPARATOR = '\t';

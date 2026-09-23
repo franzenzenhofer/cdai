@@ -1,11 +1,5 @@
 import { loadConfig } from '../config.js';
-import {
-  absolutize,
-  contractTilde,
-  isDirectory,
-  isProtocolSafePath,
-  isUnderRoot,
-} from '../paths.js';
+import { absolutize, contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
 import { forgetAlias, loadAliases, normalizeIntent, rememberAlias } from '../store/aliases.js';
 

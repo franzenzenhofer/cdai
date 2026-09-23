@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { isProtocolSafePath } from '../paths.js';
-import type { VisitRecord } from './frecency.js';
+import { isProtocolSafePath } from '@franzenzenhofer/intent-core/paths';
+import type { VisitRecord } from '@franzenzenhofer/intent-core/store/frecency';
 
 export const MAX_DB_RECORDS = 10_000;
 

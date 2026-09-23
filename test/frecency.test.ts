@@ -11,7 +11,7 @@ import {
   needsAging,
   totalVisits,
   type VisitRecord,
-} from '../src/store/frecency.js';
+} from '@franzenzenhofer/intent-core/store/frecency';
 
 const NOW = 1_800_000_000;
 const record = (visits: number, ago: number): VisitRecord => ({

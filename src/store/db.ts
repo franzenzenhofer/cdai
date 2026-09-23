@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
-import { tryReadJson } from '../json.js';
-import { dbFile, writeAtomic } from '../paths.js';
-import { applyAging, needsAging, type VisitRecord } from './frecency.js';
-import { withStateLock } from './lock.js';
+import { tryReadJson } from '@franzenzenhofer/intent-core/json';
+import { writeAtomic } from '@franzenzenhofer/intent-core/paths';
+import { dbFile } from '../state.js';
+import { applyAging, needsAging, type VisitRecord } from '@franzenzenhofer/intent-core/store/frecency';
+import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
 import { boundedRecords, canonicalPath, canonicalRecords, readVisitRecord } from './db-records.js';
 import {
   claimLogs,

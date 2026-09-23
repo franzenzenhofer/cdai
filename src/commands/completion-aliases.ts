@@ -1,5 +1,5 @@
 import { isSmartNameMatch } from '../match/completion.js';
-import { isUnder } from '../paths.js';
+import { isUnder } from '@franzenzenhofer/intent-core/paths';
 import { stripCdOptions } from '../shell/control.js';
 import type { Config } from '../config.js';
 import type { IntentAlias } from '../store/aliases.js';

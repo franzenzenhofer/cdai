@@ -1,3 +1,4 @@
+import { setProduct } from '@franzenzenhofer/intent-core/product';
 import { runAlias } from './commands/alias.js';
 import { runDoctor } from './commands/doctor.js';
 import { runComplete } from './commands/complete.js';
@@ -9,8 +10,12 @@ import { EXIT, fail, note, type ExitCode } from './protocol.js';
 import { bashInit } from './shell/bash.js';
 import { fishInit } from './shell/fish.js';
 import { zshInit } from './shell/zsh.js';
-import { secureExistingState } from './paths.js';
+import { secureExistingState } from '@franzenzenhofer/intent-core/paths';
 import packageJson from '../package.json' with { type: 'json' };
+
+// The one thing the shared core cannot know: which tool it is running inside. Set once, at
+// the edge, before anything else asks it where state lives or what to call itself.
+setProduct({ name: 'cdai', envPrefix: 'CDAI' });
 
 export const VERSION = packageJson.version;
 

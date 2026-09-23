@@ -1,8 +1,8 @@
 import { LIMIT } from '../match/constants.js';
 import type { ScoredCandidate } from '../match/score.js';
-import { isUnder } from '../paths.js';
+import { isUnder } from '@franzenzenhofer/intent-core/paths';
 import type { Db } from '../store/db.js';
-import { frecency } from '../store/frecency.js';
+import { frecency } from '@franzenzenhofer/intent-core/store/frecency';
 import type { AiRequest } from './client.js';
 
 export interface PromptInput {

@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@franzenzenhofer/intent-core": "github:franzenzenhofer/intent-core#0e9e9dd34b344a089764086991e23b3b6a30cfde",
     "@types/node": "^22.18.0",
     "@typescript-eslint/eslint-plugin": "^8.46.0",
     "@typescript-eslint/parser": "^8.46.0",

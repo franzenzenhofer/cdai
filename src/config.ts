@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { absolutize, configFile, writeAtomic } from './paths.js';
-import { withStateLock } from './store/lock.js';
+import { absolutize, configFile, writeAtomic } from '@franzenzenhofer/intent-core/paths';
+import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
 
 export const DEFAULT_DEPTH = 2;
 export const MAX_DEPTH = 64;

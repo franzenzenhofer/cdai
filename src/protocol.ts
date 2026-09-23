@@ -1,4 +1,7 @@
-import { contractTilde } from './paths.js';
+import { contractTilde } from '@franzenzenhofer/intent-core/paths';
+import { emit, note } from '@franzenzenhofer/intent-core/protocol';
+
+export { emit, note, fail } from '@franzenzenhofer/intent-core/protocol';
 
 /**
  * stdout is the machine channel and carries the resolved path and nothing else.
@@ -20,20 +23,12 @@ export const EXIT = {
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 
+/** cdai's own stdout contract: one absolute path, and nothing else, ever. */
 export const emitPath = (path: string): void => {
-  process.stdout.write(`${path}\n`);
-};
-
-export const note = (message: string): void => {
-  process.stderr.write(`${message}\n`);
+  emit(path);
 };
 
 export const jump = (path: string): void => {
   note(`→ ${contractTilde(path)}`);
   emitPath(path);
-};
-
-export const fail = (message: string, hint?: string): void => {
-  note(`cdai: ${message}`);
-  if (hint !== undefined) note(`      ${hint}`);
 };

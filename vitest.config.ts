@@ -5,6 +5,7 @@ const TEST_TIMEOUT_MS = 30_000;
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
+    setupFiles: ['./test/setup.ts'],
     testTimeout: TEST_TIMEOUT_MS,
     hookTimeout: TEST_TIMEOUT_MS,
     pool: 'forks',

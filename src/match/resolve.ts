@@ -11,9 +11,9 @@ import { pathReading, urlReadings, type ParsedQuery } from './tokenize.js';
 import type { DirIndex } from '../store/indexer.js';
 import { childrenOf } from '../store/indexer.js';
 import type { Db } from '../store/db.js';
-import { frecency } from '../store/frecency.js';
-import { PathChainSet } from './path-trie.js';
-import { isDirectory } from '../paths.js';
+import { frecency } from '@franzenzenhofer/intent-core/store/frecency';
+import { PathChainSet } from '@franzenzenhofer/intent-core/match/path-trie';
+import { isDirectory } from '@franzenzenhofer/intent-core/paths';
 
 export interface ResolveInput {
   readonly index: DirIndex;

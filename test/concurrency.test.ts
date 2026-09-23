@@ -6,6 +6,13 @@ import { loadAliases } from '../src/store/aliases.js';
 import { loadDb } from '../src/store/db.js';
 import { makeFixture, type Fixture } from './fixtures.js';
 
+/**
+ * A worker is a whole separate process, so it declares the product identity itself, exactly as
+ * src/cli.ts does. The shared core refuses to guess which tool it is running inside.
+ */
+const AS_CDAI = "import { setProduct } from '@franzenzenhofer/intent-core/product';"
+  + " setProduct({ name: 'cdai', envPrefix: 'CDAI' });";
+
 const WORKERS = 16;
 const VISITS = 200;
 let fixture: Fixture;
@@ -38,14 +45,15 @@ describe('cross-process state transactions', () => {
         `${String(1_700_000_000 + i)}\t/bulk\n`,
       );
     }
-    const source = `import { ingest } from './src/store/db.ts'; ingest();`;
+    const source = `${AS_CDAI} import { ingest } from './src/store/db.ts'; ingest();`;
     expect(await Promise.all(Array.from({ length: WORKERS }, () => runWorker(source))))
       .toEqual(Array.from({ length: WORKERS }, () => 0));
     expect(loadDb().records.find((record) => record.path === '/bulk')?.visits).toBe(VISITS);
   });
 
   it('preserves every concurrent confirmed alias update', async () => {
-    const source = `import { rememberAlias } from './src/store/aliases.ts'; rememberAlias(process.env.ALIAS_QUERY ?? '', '/target', 1);`;
+    const source = `${AS_CDAI} import { rememberAlias } from './src/store/aliases.ts';`
+      + ` rememberAlias(process.env.ALIAS_QUERY ?? '', '/target', 1);`;
     const statuses = await Promise.all(
       Array.from({ length: WORKERS }, (_, i) => runWorker(source, { ALIAS_QUERY: `intent ${String(i)}` })),
     );
@@ -63,7 +71,8 @@ describe('cross-process state transactions', () => {
     writeFileSync(counter, '0');
     const source = [
       `import { readFileSync, writeFileSync } from 'node:fs';`,
-      `import { withStateLock } from './src/store/lock.ts';`,
+      AS_CDAI,
+      `import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';`,
       `const wait = new Int32Array(new SharedArrayBuffer(4));`,
       `withStateLock(process.env.STATE_FILE ?? '', () => {`,
       `  const value = Number(readFileSync(process.env.COUNTER ?? '', 'utf8'));`,

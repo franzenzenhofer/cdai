@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveExecutable } from '../src/executable.js';
+import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 
 describe('resolveExecutable', () => {
   it('finds commands on PATH and accepts explicit executable paths', () => {

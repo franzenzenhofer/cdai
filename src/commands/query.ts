@@ -6,7 +6,7 @@ import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
 import { tokenize, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import { contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '../paths.js';
+import { contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
 import { nativeCdWords, spelledPlace } from '../match/literal.js';
 import { confirm, hasTty, pick, toItems } from '../picker.js';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';

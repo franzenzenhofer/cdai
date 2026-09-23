@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseZoxideList } from '../src/commands/import-zoxide.js';
 import { CLOUD_DEPTH, DEV_DEPTH, HUB_MIN_CHILDREN, detectRoots } from '../src/commands/detect.js';
 import { DEFAULT_AI, loadConfig } from '../src/config.js';
-import { DAY_SECONDS } from '../src/store/frecency.js';
+import { DAY_SECONDS } from '@franzenzenhofer/intent-core/store/frecency';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 import packageJson from '../package.json' with { type: 'json' };
 

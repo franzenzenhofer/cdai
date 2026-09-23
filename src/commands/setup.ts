@@ -10,7 +10,7 @@ import {
   type Config,
   type RootConfig,
 } from '../config.js';
-import { absolutize, configFile, contractTilde } from '../paths.js';
+import { absolutize, configFile, contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { confirm, hasTty } from '../picker.js';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
 import { refreshIndex } from '../store/indexer.js';

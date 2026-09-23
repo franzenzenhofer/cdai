@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import { tryReadJson } from '../json.js';
-import { aliasesFile, isProtocolSafePath, writeAtomic } from '../paths.js';
-import { withStateLock } from './lock.js';
+import { tryReadJson } from '@franzenzenhofer/intent-core/json';
+import { isProtocolSafePath, writeAtomic } from '@franzenzenhofer/intent-core/paths';
+import { aliasesFile } from '../state.js';
+import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
 
 const ALIAS_VERSION = 1;
 export const MAX_ALIASES = 256;

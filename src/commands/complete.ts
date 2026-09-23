@@ -13,7 +13,7 @@ import { loadDb } from '../store/db.js';
 import { loadIndex, matchesConfig } from '../store/indexer.js';
 import { CLI_CONTROLS, stripCdOptions } from '../shell/control.js';
 import { loadAliases } from '../store/aliases.js';
-import { isDirectory } from '../paths.js';
+import { isDirectory } from '@franzenzenhofer/intent-core/paths';
 import { completeAliasWords, completeRootNames } from './completion-aliases.js';
 
 export const COMPLETION_LIMIT = 20;

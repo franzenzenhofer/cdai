@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import type { AiConfig } from '../config.js';
-import { resolveExecutable } from '../executable.js';
+import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { claudeArgs } from './claude.js';
 
 export type AiBackendKind = 'apfel' | 'claude' | 'gemini' | 'ollama' | 'custom';

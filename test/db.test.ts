@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { emptyDb, ingest, loadDb, mergeVisits, parseVisitLines, recordVisit, saveDb } from '../src/store/db.js';
-import { AGING_THRESHOLD } from '../src/store/frecency.js';
+import { AGING_THRESHOLD } from '@franzenzenhofer/intent-core/store/frecency';
 
 let dataDir = '';
 
