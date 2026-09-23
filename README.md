@@ -460,6 +460,18 @@ short atomic updates so visits and aliases are not lost or double-counted.
   newline-delimited, so such paths are excluded instead of being emitted ambiguously.
 - **Small TypeScript codebase.** This is one focused tool, not a platform.
 
+## Shared with openit
+
+Since v0.4.0 the half of cdai that is not about directories lives in
+[intent-core](https://github.com/franzenzenhofer/intent-core): the text matcher, the decision
+rule, frecency, the state directory and its locking, and the closed-set AI tier. Its other
+consumer is [openit](https://github.com/franzenzenhofer/openit), which says what to open rather
+than where to go.
+
+What stayed here is what is cdai's own: its weights and thresholds, its stopwords, the claim
+bookkeeping that lets a shell hook append visits while cdai drains them, the shell integration,
+and the one contract it asks a model to answer.
+
 ## Development
 
 ```bash
