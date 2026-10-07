@@ -43,7 +43,7 @@ describe('tokenize', () => {
     expect(hostLabels('https://tidewheel.orbit.dev/level/7')).toEqual(['tidewheel', 'orbit']);
     expect(hostLabels('https://github.com/octocat/tidewheel')).toEqual([]);
     expect(hostLabels('tidewheel.pages.dev')).toEqual(['tidewheel']);
-    expect(hostLabels('amt.wien.gv.at')).toEqual(['amt', 'wien']);
+    expect(hostLabels('amt.example.gv.at')).toEqual(['amt', 'example']);
     expect(hostLabels('node.js')).toEqual([]);
   });
 
