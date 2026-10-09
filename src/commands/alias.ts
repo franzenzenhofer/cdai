@@ -1,7 +1,8 @@
 import { loadConfig } from '../config.js';
-import { absolutize, contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
+import { absolutize, configFile, contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
 import { EXIT, fail, note, type ExitCode } from '../protocol.js';
-import { forgetAlias, loadAliases, normalizeIntent, rememberAlias } from '../store/aliases.js';
+import { forgetAlias, normalizeIntent, rememberAlias } from '../store/aliases.js';
+import { allAliases } from './alias-recall.js';
 
 const MILLIS_PER_SECOND = 1000;
 
@@ -75,7 +76,8 @@ const forget = (args: readonly string[]): ExitCode => {
     return EXIT.error;
   }
   if (!forgetAlias(query)) {
-    fail(`no confirmed alias for "${query}"`);
+    const declared = loadConfig().aliases.some((alias) => alias.query === normalizeIntent(query));
+    fail(declared ? `"${query}" is declared in ${configFile()}; remove it there` : `no confirmed alias for "${query}"`);
     return EXIT.error;
   }
   note(`cdai: forgot "${query}"`);
@@ -89,9 +91,10 @@ export const runAlias = (args: readonly string[]): ExitCode => {
     return EXIT.ok;
   }
   if (command === 'list' && args.length === 1) {
-    const aliases = loadAliases().aliases;
+    const aliases = allAliases(loadConfig());
     if (aliases.length === 0) note('cdai: no confirmed intent aliases');
-    aliases.forEach((alias) => note(`${alias.query} -> ${contractTilde(alias.path)}`));
+    aliases.forEach((alias) =>
+      note(`${alias.query} -> ${contractTilde(alias.path)}${alias.source === 'config' ? ' (config)' : ''}`));
     return EXIT.ok;
   }
   if (command === 'add') return add(args.slice(1));

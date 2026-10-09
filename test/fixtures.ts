@@ -119,3 +119,30 @@ export const fixtureConfig = (fixture: Fixture, ai: Record<string, unknown> = {}
 export const writeConfig = (fixture: Fixture, ai: Record<string, unknown> = {}): void => {
   writeFileSync(join(fixture.configDir, 'config.json'), fixtureConfig(fixture, ai));
 };
+
+const DAY_SECONDS = 24 * 3600;
+
+/**
+ * Rounds of one recurring workshop next to an older, unrelated workshop folder, the shape a query
+ * containing an order word ("mobile first workshop") used to get wrong. Ages in days, deepest
+ * first, because creating a child touches its parent's mtime.
+ */
+export const WORKSHOP_AGES: ReadonlyArray<readonly [string, number]> = [
+  ['mobile-workshop-2024/books', 2 * 365],
+  ['mobile-workshop-2024/slides', 365],
+  ['mobile-workshop-2024', 300],
+  ['mobile-first-workshops/mobile-first-2025', 300],
+  ['mobile-first-workshops/mobile-first-pre-summer', 120],
+  ['mobile-first-workshops/mobile-kick-off-2026', 150],
+  ['mobile-first-workshops/mobile-first-october-2026', 1],
+  ['mobile-first-workshops', 2],
+];
+
+export const addWorkshopTree = (fixture: Fixture): void => {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [relative] of WORKSHOP_AGES) mkdirSync(join(fixture.clients, relative), { recursive: true });
+  for (const [relative, days] of WORKSHOP_AGES) {
+    const stamp = now - days * DAY_SECONDS;
+    utimesSync(join(fixture.clients, relative), stamp, stamp);
+  }
+};

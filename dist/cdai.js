@@ -16,7 +16,7 @@ var productEnv = (suffix) => {
 };
 
 // src/config.ts
-import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
+import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
 
 // node_modules/@franzenzenhofer/intent-core/dist/paths.js
 import { homedir } from "node:os";
@@ -317,9 +317,88 @@ var withStateLock = (stateFile2, action) => {
   }
 };
 
-// src/config.ts
+// node_modules/@franzenzenhofer/intent-core/dist/store/aliases.js
+import { existsSync as existsSync3 } from "node:fs";
+
+// node_modules/@franzenzenhofer/intent-core/dist/json.js
+import { readFileSync as readFileSync2 } from "node:fs";
+var tryReadJson = (file) => {
+  try {
+    return JSON.parse(readFileSync2(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+};
+
+// node_modules/@franzenzenhofer/intent-core/dist/store/aliases.js
+var ALIAS_VERSION = 1;
+var MAX_ALIASES = 256;
+var MAX_QUERY_LENGTH = 512;
+var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/gu, " ");
+var validQuery = (query) => typeof query === "string" && query !== "" && query.length <= MAX_QUERY_LENGTH;
+var readAlias = (spec2, value) => {
+  if (!isRecord2(value))
+    return void 0;
+  const { query, updatedAt } = value;
+  if (!validQuery(query))
+    return void 0;
+  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) {
+    return void 0;
+  }
+  const parsed = spec2.readValue(value["value"]);
+  return parsed === void 0 ? void 0 : { query, value: parsed, updatedAt };
+};
+var checkVersion = (parsed) => {
+  if (isRecord2(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
+    throw new Error(`unsupported alias schema version ${String(parsed["version"])}; state was not modified`);
+  }
+};
+var loadAliases = (spec2) => {
+  const path = spec2.file();
+  if (!existsSync3(path))
+    return [];
+  const parsed = tryReadJson(path);
+  checkVersion(parsed);
+  if (!isRecord2(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"]))
+    return [];
+  return parsed["aliases"].slice(0, MAX_ALIASES).map((value) => readAlias(spec2, value)).filter((alias) => alias !== void 0);
+};
+var save = (spec2, aliases) => {
+  writeAtomic(spec2.file(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
+`);
+};
+var findAlias = (spec2, query) => {
+  const normalized = normalizeIntent(query);
+  return normalized === "" ? void 0 : loadAliases(spec2).find((a) => a.query === normalized);
+};
+var findAliasWhere = (spec2, accepts) => loadAliases(spec2).find((alias) => accepts(alias.query));
+var rememberAlias = (spec2, query, value, updatedAt) => {
+  const normalized = normalizeIntent(query);
+  if (!validQuery(normalized) || spec2.readValue(value) === void 0)
+    return;
+  withStateLock(spec2.file(), () => {
+    const rest = loadAliases(spec2).filter((alias) => alias.query !== normalized);
+    save(spec2, [{ query: normalized, value, updatedAt }, ...rest].slice(0, MAX_ALIASES));
+  });
+};
+var forgetAlias = (spec2, query) => {
+  const normalized = normalizeIntent(query);
+  return withStateLock(spec2.file(), () => {
+    const all = loadAliases(spec2);
+    const kept = all.filter((alias) => alias.query !== normalized);
+    if (kept.length === all.length)
+      return false;
+    save(spec2, kept);
+    return true;
+  });
+};
+
+// src/config-types.ts
 var DEFAULT_DEPTH = 2;
 var MAX_DEPTH = 64;
+var MAX_TIMER_MS = 2147483647;
+var WEIGHT_LIMIT = 1e3;
 var DEFAULT_IGNORE = [
   "node_modules",
   ".git",
@@ -339,52 +418,125 @@ var DEFAULT_AI = {
   /** Long enough for remote CLI cold starts while still bounding a failed backend. */
   timeoutMs: 45e3
 };
-var MAX_TIMER_MS = 2147483647;
-var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+// src/config-read.ts
+var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var invalid = (where, problem) => new Error(`${where} ${problem}`);
+var expectKeys = (record, allowed, where) => {
+  const unknown = Object.keys(record).find((key) => !allowed.includes(key));
+  if (unknown === void 0) return;
+  throw invalid(where, `has unknown key "${unknown}" (allowed: ${allowed.join(", ")})`);
+};
+var readPath = (value, where) => {
+  if (typeof value !== "string" || value.trim() === "") throw invalid(where, "must be a non-empty path");
+  if (!value.startsWith("/") && !value.startsWith("~")) throw invalid(where, `must start with / or ~, got "${value}"`);
+  if (!isProtocolSafePath(value)) throw invalid(where, "must not contain a line break");
+  return absolutize(value);
+};
+var readInteger = (value, where, min, max) => {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max) return value;
+  throw invalid(where, `must be an integer from ${String(min)} to ${String(max)}, got ${JSON.stringify(value)}`);
+};
+var readRoot = (entry, where) => {
+  if (typeof entry === "string") return { path: readPath(entry, where), depth: DEFAULT_DEPTH };
+  if (!isRecord3(entry)) throw invalid(where, 'must be a path or { "path", "depth", "weight" }');
+  expectKeys(entry, ["path", "depth", "weight"], where);
+  const path = readPath(entry["path"], `${where}.path`);
+  const depth = entry["depth"] === void 0 ? DEFAULT_DEPTH : readInteger(entry["depth"], `${where}.depth`, 1, MAX_DEPTH);
+  if (entry["weight"] === void 0) return { path, depth };
+  return { path, depth, weight: readInteger(entry["weight"], `${where}.weight`, -WEIGHT_LIMIT, WEIGHT_LIMIT) };
+};
 var readRoots = (value) => {
-  if (!Array.isArray(value)) return [];
-  const roots = /* @__PURE__ */ new Map();
-  for (const entry of value) {
-    const rawPath = typeof entry === "string" ? entry : isRecord2(entry) ? entry["path"] : void 0;
-    if (typeof rawPath !== "string" || rawPath.trim() === "") continue;
-    const rawDepth = isRecord2(entry) ? entry["depth"] : void 0;
-    const validDepth2 = typeof rawDepth === "number" && Number.isFinite(rawDepth) && rawDepth > 0 ? Math.min(MAX_DEPTH, Math.floor(rawDepth)) : DEFAULT_DEPTH;
-    const path = absolutize(rawPath);
-    roots.set(path, { path, depth: validDepth2 });
+  if (value === void 0) return [];
+  if (!Array.isArray(value)) throw invalid("roots", "must be an array");
+  const roots = value.map((entry, i) => readRoot(entry, `roots[${String(i)}]`));
+  const duplicate = roots.find((root, i) => roots.findIndex((other) => other.path === root.path) !== i);
+  if (duplicate !== void 0) throw invalid("roots", `lists ${duplicate.path} twice`);
+  return roots;
+};
+var readIgnore = (value) => {
+  if (value === void 0) return [...DEFAULT_IGNORE];
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string" && v.trim() !== "")) {
+    throw invalid("ignore", "must be an array of directory names");
   }
-  return [...roots.values()];
+  return value;
+};
+var readString = (value, where, fallback, allowEmpty) => {
+  if (value === void 0) return fallback;
+  if (typeof value === "string" && (allowEmpty || value.trim() !== "")) return value;
+  throw invalid(where, allowEmpty ? "must be a string" : "must be a non-empty string");
+};
+var readArgs = (value) => {
+  if (value === void 0) return [];
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return value;
+  throw invalid("ai.args", "must be an array of strings");
+};
+var readEnabled = (value) => {
+  if (value === void 0) return DEFAULT_AI.enabled;
+  if (typeof value === "boolean") return value;
+  throw invalid("ai.enabled", "must be true or false");
 };
 var readAi = (value) => {
-  if (!isRecord2(value)) return { ...DEFAULT_AI };
-  const args = value["args"];
-  const command = value["command"];
-  const timeoutMs = value["timeoutMs"];
+  if (value === void 0) return { ...DEFAULT_AI };
+  if (!isRecord3(value)) throw invalid("ai", "must be an object");
+  expectKeys(value, ["enabled", "command", "args", "model", "timeoutMs"], "ai");
+  const timeout = value["timeoutMs"];
   return {
-    enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_AI.enabled,
-    command: typeof command === "string" && command.trim() !== "" ? command : DEFAULT_AI.command,
-    args: Array.isArray(args) ? args.filter((a) => typeof a === "string") : [],
-    model: typeof value["model"] === "string" ? value["model"] : DEFAULT_AI.model,
-    timeoutMs: typeof timeoutMs === "number" && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMER_MS ? timeoutMs : DEFAULT_AI.timeoutMs
+    enabled: readEnabled(value["enabled"]),
+    command: readString(value["command"], "ai.command", DEFAULT_AI.command, false),
+    args: readArgs(value["args"]),
+    model: readString(value["model"], "ai.model", DEFAULT_AI.model, true),
+    timeoutMs: timeout === void 0 ? DEFAULT_AI.timeoutMs : readInteger(timeout, "ai.timeoutMs", 1, MAX_TIMER_MS)
   };
 };
-var readIgnore = (value) => Array.isArray(value) ? value.filter((v) => typeof v === "string") : [...DEFAULT_IGNORE];
-var emptyConfig = () => ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI } });
-var configExists = () => existsSync3(configFile());
-var loadConfig = () => {
-  const file = configFile();
-  if (!existsSync3(file)) return emptyConfig();
-  const raw = readFileSync2(file, "utf8");
+var readAliases = (value) => {
+  if (value === void 0) return [];
+  if (!isRecord3(value)) throw invalid("aliases", 'must be an object of "words": "path"');
+  const aliases = [];
+  for (const [words, path] of Object.entries(value)) {
+    const query = normalizeIntent(words);
+    const where = `aliases["${words}"]`;
+    if (query === "") throw invalid("aliases", "has an entry without words");
+    if (aliases.some((alias) => alias.query === query)) throw invalid(where, "is listed twice");
+    aliases.push({ query, path: readPath(path, where) });
+  }
+  return aliases;
+};
+
+// src/config.ts
+var TOP_LEVEL_KEYS = ["roots", "ignore", "ai", "aliases"];
+var emptyConfig = () => ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI }, aliases: [] });
+var configExists = () => existsSync4(configFile());
+var parseConfig = (raw) => {
   const parsed = JSON.parse(raw);
-  if (!isRecord2(parsed)) throw new Error(`config is not a JSON object: ${file}`);
+  if (!isRecord3(parsed)) throw new Error("must be a JSON object");
+  expectKeys(parsed, TOP_LEVEL_KEYS, "config");
   return {
     roots: readRoots(parsed["roots"]),
     ignore: readIgnore(parsed["ignore"]),
-    ai: readAi(parsed["ai"])
+    ai: readAi(parsed["ai"]),
+    aliases: readAliases(parsed["aliases"])
   };
 };
+var loadConfig = () => {
+  const file = configFile();
+  if (!existsSync4(file)) return emptyConfig();
+  try {
+    return parseConfig(readFileSync3(file, "utf8"));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`config error in ${file}: ${reason}`);
+  }
+};
+var serializeConfig = (config) => `${JSON.stringify({
+  roots: config.roots,
+  ignore: config.ignore,
+  ai: config.ai,
+  aliases: Object.fromEntries(config.aliases.map((alias) => [alias.query, alias.path]))
+}, null, 2)}
+`;
 var saveConfig = (config) => {
-  withStateLock(configFile(), () => writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}
-`));
+  withStateLock(configFile(), () => writeAtomic(configFile(), serializeConfig(config)));
 };
 
 // node_modules/@franzenzenhofer/intent-core/dist/protocol.js
@@ -429,81 +581,6 @@ var jump = (path) => {
 import { existsSync as existsSync5 } from "node:fs";
 import { isAbsolute as isAbsolute2 } from "node:path";
 
-// node_modules/@franzenzenhofer/intent-core/dist/json.js
-import { readFileSync as readFileSync3 } from "node:fs";
-var tryReadJson = (file) => {
-  try {
-    return JSON.parse(readFileSync3(file, "utf8"));
-  } catch {
-    return void 0;
-  }
-};
-
-// node_modules/@franzenzenhofer/intent-core/dist/store/aliases.js
-import { existsSync as existsSync4 } from "node:fs";
-var ALIAS_VERSION = 1;
-var MAX_ALIASES = 256;
-var MAX_QUERY_LENGTH = 512;
-var isRecord3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var normalizeIntent = (query) => query.trim().toLowerCase().replace(/\s+/gu, " ");
-var validQuery = (query) => typeof query === "string" && query !== "" && query.length <= MAX_QUERY_LENGTH;
-var readAlias = (spec2, value) => {
-  if (!isRecord3(value))
-    return void 0;
-  const { query, updatedAt } = value;
-  if (!validQuery(query))
-    return void 0;
-  if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0) {
-    return void 0;
-  }
-  const parsed = spec2.readValue(value["value"]);
-  return parsed === void 0 ? void 0 : { query, value: parsed, updatedAt };
-};
-var checkVersion = (parsed) => {
-  if (isRecord3(parsed) && typeof parsed["version"] === "number" && parsed["version"] !== ALIAS_VERSION) {
-    throw new Error(`unsupported alias schema version ${String(parsed["version"])}; state was not modified`);
-  }
-};
-var loadAliases = (spec2) => {
-  const path = spec2.file();
-  if (!existsSync4(path))
-    return [];
-  const parsed = tryReadJson(path);
-  checkVersion(parsed);
-  if (!isRecord3(parsed) || parsed["version"] !== ALIAS_VERSION || !Array.isArray(parsed["aliases"]))
-    return [];
-  return parsed["aliases"].slice(0, MAX_ALIASES).map((value) => readAlias(spec2, value)).filter((alias) => alias !== void 0);
-};
-var save = (spec2, aliases) => {
-  writeAtomic(spec2.file(), `${JSON.stringify({ version: ALIAS_VERSION, aliases })}
-`);
-};
-var findAlias = (spec2, query) => {
-  const normalized = normalizeIntent(query);
-  return normalized === "" ? void 0 : loadAliases(spec2).find((a) => a.query === normalized);
-};
-var findAliasWhere = (spec2, accepts) => loadAliases(spec2).find((alias) => accepts(alias.query));
-var rememberAlias = (spec2, query, value, updatedAt) => {
-  const normalized = normalizeIntent(query);
-  if (!validQuery(normalized) || spec2.readValue(value) === void 0)
-    return;
-  withStateLock(spec2.file(), () => {
-    const rest = loadAliases(spec2).filter((alias) => alias.query !== normalized);
-    save(spec2, [{ query: normalized, value, updatedAt }, ...rest].slice(0, MAX_ALIASES));
-  });
-};
-var forgetAlias = (spec2, query) => {
-  const normalized = normalizeIntent(query);
-  return withStateLock(spec2.file(), () => {
-    const all = loadAliases(spec2);
-    const kept = all.filter((alias) => alias.query !== normalized);
-    if (kept.length === all.length)
-      return false;
-    save(spec2, kept);
-    return true;
-  });
-};
-
 // src/state.ts
 var dbFile = () => stateFile("db.json");
 var indexFile = () => stateFile("index.json");
@@ -513,11 +590,11 @@ var visitsLog = () => stateFile("visits.log");
 // src/store/aliases.ts
 var ALIAS_VERSION2 = 1;
 var isRecord4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var readPath = (value) => {
+var readPath2 = (value) => {
   if (typeof value !== "string" || !isAbsolute2(value) || !isProtocolSafePath(value)) return void 0;
   return value;
 };
-var spec = { file: aliasesFile, readValue: readPath };
+var spec = { file: aliasesFile, readValue: readPath2 };
 var migrateLegacy = () => {
   const file = aliasesFile();
   if (!existsSync5(file)) return;
@@ -559,6 +636,364 @@ var rememberAlias2 = (query, path, updatedAt) => {
   rememberAlias(ready(), query, path, updatedAt);
 };
 var forgetAlias2 = (query) => forgetAlias(ready(), query);
+
+// node_modules/@franzenzenhofer/intent-core/dist/match/words.js
+var YEAR_PATTERN = /^\d{4}$/u;
+var splitWords = (input) => input.toLowerCase().split(/\s+/u).filter((word) => word !== "");
+var isYear = (token, range) => {
+  if (!YEAR_PATTERN.test(token))
+    return false;
+  const value = Number.parseInt(token, 10);
+  return value >= range.min && value <= range.max;
+};
+var dropStopwords = (words, stopwords) => {
+  const kept = words.filter((word) => !stopwords.has(word));
+  return kept.length > 0 ? kept : [...words];
+};
+
+// node_modules/@franzenzenhofer/intent-core/dist/match/url.js
+var HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/u;
+var TLDS = /* @__PURE__ */ new Set([
+  "com",
+  "net",
+  "org",
+  "info",
+  "biz",
+  "io",
+  "ai",
+  "dev",
+  "app",
+  "co",
+  "me",
+  "tv",
+  "xyz",
+  "cloud",
+  "site",
+  "online",
+  "shop",
+  "blog",
+  "at",
+  "de",
+  "ch",
+  "uk",
+  "eu",
+  "it",
+  "fr",
+  "es",
+  "nl",
+  "pl",
+  "cz",
+  "hu",
+  "si",
+  "sk",
+  "us",
+  "ca",
+  "au",
+  "nz",
+  "jp",
+  "cn",
+  "in",
+  "br"
+]);
+var HOST_NOISE = /* @__PURE__ */ new Set([
+  "www",
+  "m",
+  "web",
+  "shop",
+  "blog",
+  "app",
+  "api",
+  "dev",
+  "staging",
+  "test",
+  "mail",
+  "co",
+  "com",
+  "net",
+  "org",
+  "gov",
+  "gv",
+  "edu",
+  "ac",
+  "github",
+  "gitlab",
+  "bitbucket",
+  "codeberg",
+  "sourceforge",
+  "npmjs",
+  "huggingface",
+  "pages",
+  "workers",
+  "vercel",
+  "netlify",
+  "herokuapp",
+  "replit",
+  "glitch"
+]);
+var PATH_NOISE = /* @__PURE__ */ new Set([
+  "index",
+  "home",
+  "en",
+  "de",
+  "at",
+  "us",
+  "uk",
+  "p",
+  "page",
+  "pages",
+  "blog",
+  "post",
+  "posts",
+  "docs",
+  "doc",
+  "level",
+  "tag",
+  "tags",
+  "category",
+  "search",
+  "www",
+  "main",
+  "master"
+]);
+var URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
+var LOCAL_PATH = /^~|\//u;
+var PATH_DOTS = /* @__PURE__ */ new Set(["", ".", "..", "~"]);
+var PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
+var MIN_NAME_LENGTH = 2;
+var MAX_URL_READINGS = 4;
+var stripScheme = (word) => word.replace(URL_SCHEME, "").replace(/[.,;:!?]+$/u, "");
+var hostLabels = (word) => {
+  const bare = stripScheme(word);
+  if (!HOST_PATTERN.test(bare))
+    return [];
+  const labels = bare.split("/")[0]?.split(".") ?? [];
+  if (!TLDS.has(labels.at(-1) ?? ""))
+    return [];
+  return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
+};
+var pathNames = (word) => {
+  const bare = stripScheme(word);
+  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare))
+    return [];
+  return bare.split("/").slice(1).map((segment) => (segment.split("?")[0] ?? "").replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && !/^\d+$/u.test(segment) && !PATH_NOISE.has(segment)).reverse();
+};
+var localNames = (word) => {
+  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word))
+    return [];
+  return word.split("/").map((segment) => segment.replace(PAGE_SUFFIX, "")).filter((segment) => !PATH_DOTS.has(segment)).reverse();
+};
+var urlNames = (word) => [...pathNames(word), ...hostLabels(word)];
+var pathReading = (tokens) => {
+  const read = [];
+  const within = [];
+  let spelled = false;
+  for (const token of tokens) {
+    const [deepest, ...above] = localNames(token);
+    if (deepest === void 0) {
+      read.push(token);
+      continue;
+    }
+    spelled = true;
+    read.push(deepest);
+    within.push(...above);
+  }
+  return spelled ? { tokens: read, within } : null;
+};
+var urlReadings = (tokens) => {
+  const names = tokens.map(urlNames);
+  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
+  const readings2 = [];
+  for (let level = 0; level < depth; level += 1) {
+    const read = tokens.map((token, index) => {
+      const list = names[index] ?? [];
+      return list[Math.min(level, list.length - 1)] ?? token;
+    });
+    const known = [tokens, ...readings2];
+    if (known.some((seen) => seen.every((token, index) => token === read[index])))
+      continue;
+    readings2.push(read);
+  }
+  return readings2;
+};
+
+// src/match/constants.ts
+var SCORE = {
+  exact: 1e3,
+  prefix: 800,
+  wordBoundary: 600,
+  substring: 400,
+  fuzzyMax: 380,
+  /** Token found nowhere in the name but present in the path above it. */
+  pathOnly: 200,
+  none: 0
+};
+var FUZZY = {
+  /** Base share of fuzzyMax awarded for matching all characters at all. */
+  baseShare: 0.45,
+  /** Share awarded proportionally to how densely the characters sit together. */
+  densityShare: 0.35,
+  /** Share awarded for how much of the candidate name the query covers. */
+  coverageShare: 0.2
+};
+var BONUS = {
+  /** Weight of log2(1 + frecency). */
+  frecency: 100,
+  /** Candidate lives under the current working directory. */
+  underCwd: 25,
+  /**
+   * Deterministic tie break: awarded in proportion to how much of the candidate name the
+   * query covers, so "bella" prefers "petalworks" over "petalworks-2026" at equal match class.
+   */
+  brevity: 40,
+  /**
+   * Awarded in full to a directory modified just now, halving every RECENCY.halfLifeDays. Below
+   * every match class gap, so it only orders equal matches: of several equally named rounds of
+   * one thing, the one being worked on comes first.
+   */
+  recency: 30
+};
+var RECENCY = {
+  halfLifeDays: 30
+};
+var THRESHOLD = {
+  /** A single candidate at or above this score wins outright when the gap is big enough. */
+  hit: 550,
+  /** Minimum gap between best and runner up for an outright win. */
+  gap: 200,
+  /** Candidates at or above this score are worth showing in the picker. */
+  candidate: 400,
+  /** Fewer than this many picker-worthy candidates falls through to the AI tier. */
+  minPickerCandidates: 2
+};
+var COMPLETION = {
+  /** Short fuzzy fragments create noisy, destructive shell replacements. */
+  minSmartLength: 3,
+  maxTypoLength: 64
+};
+var LIMIT = {
+  /** Candidates offered to the picker. */
+  picker: 10,
+  /** Fuzzy candidates handed to the AI tier. */
+  aiFuzzy: 30,
+  /** Most frecent paths handed to the AI tier. */
+  aiFrecent: 20,
+  /** Guesses printed when nothing matched. */
+  suggestions: 3
+};
+var STOPWORDS = /* @__PURE__ */ new Set([
+  "folder",
+  "dir",
+  "directory",
+  "the",
+  "project",
+  "go",
+  "to",
+  "my",
+  "in",
+  "of",
+  "a",
+  "an",
+  "for",
+  "from",
+  // How a request is phrased when it points at something: "open this <path>", "show me <name>".
+  "open",
+  "this",
+  "that",
+  "show",
+  "me"
+]);
+var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
+var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
+var IN_OPERATOR = "in";
+var YEAR_MIN = 1990;
+var YEAR_MAX = 2999;
+
+// src/match/tokenize.ts
+var YEARS = { min: YEAR_MIN, max: YEAR_MAX };
+var isYear2 = (token) => isYear(token, YEARS);
+var pathReading2 = (query) => {
+  const read = pathReading(query.tokens);
+  if (read === null) return null;
+  return { ...query, tokens: [...read.tokens], within: [...query.within, ...read.within] };
+};
+var urlReadings2 = (query) => urlReadings(query.tokens).map((tokens) => ({ ...query, tokens }));
+var takeRootFilter = (words) => {
+  const rest = [];
+  let rootFilter = null;
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const next = words[i + 1];
+    if (word === IN_OPERATOR && next !== void 0 && rootFilter === null) {
+      rootFilter = next;
+      i += 1;
+      continue;
+    }
+    rest.push(word);
+  }
+  return { rest, rootFilter };
+};
+var orderOf = (word) => {
+  if (LATEST_WORDS.has(word)) return "latest";
+  return OLDEST_WORDS.has(word) ? "oldest" : "none";
+};
+var takeOrder = (words) => {
+  const rest = [];
+  let order = "none";
+  let orderWord = null;
+  for (const word of words) {
+    const wordOrder = order === "none" ? orderOf(word) : "none";
+    if (wordOrder === "none") {
+      rest.push(word);
+      continue;
+    }
+    order = wordOrder;
+    orderWord = word;
+  }
+  return { rest, order, orderWord };
+};
+var termReading = (query) => {
+  if (query.orderWord === null) return null;
+  return {
+    ...query,
+    tokens: [...query.tokens, query.orderWord],
+    order: "none",
+    orderWord: null,
+    within: [...query.within, query.orderWord]
+  };
+};
+var intentKey = (input) => dropStopwords(splitWords(input), STOPWORDS).join(" ");
+var tokenize = (input) => {
+  const words = splitWords(input);
+  const { rest: afterIn, rootFilter } = takeRootFilter(words);
+  const { rest: afterOrder, order, orderWord } = takeOrder(afterIn);
+  const years = afterOrder.filter(isYear2);
+  const searchable = afterOrder.filter((word) => !isYear2(word));
+  const tokens = dropStopwords(searchable, STOPWORDS);
+  if (tokens.length === 0 && words.length > 0) {
+    return { raw: input, tokens: words, order: "none", orderWord: null, years: [], rootFilter: null, within: [] };
+  }
+  return { raw: input, tokens, order, orderWord, years, rootFilter, within: [] };
+};
+var tokenizeArgs = (args) => tokenize(args.join(" "));
+
+// src/commands/alias-recall.ts
+var fromConfig = (raw, config) => {
+  const exact = normalizeIntent(raw);
+  const key = intentKey(raw);
+  const found = config.aliases.find((alias) => alias.query === exact) ?? config.aliases.find((alias) => intentKey(alias.query) === key);
+  return found === void 0 ? void 0 : { ...found, source: "config" };
+};
+var fromStore = (raw) => {
+  const key = intentKey(raw);
+  const found = findAlias2(raw) ?? (key === "" ? void 0 : findAliasWhere2((stored) => intentKey(stored) === key));
+  return found === void 0 ? void 0 : { query: found.query, path: found.path, source: "taught" };
+};
+var recallIntent = (raw, config) => fromConfig(raw, config) ?? fromStore(raw);
+var allAliases = (config) => [
+  ...config.aliases.map((alias) => ({ ...alias, source: "config" })),
+  ...loadAliases2().aliases.map((alias) => ({ query: alias.query, path: alias.path, source: "taught" }))
+];
 
 // src/commands/alias.ts
 var MILLIS_PER_SECOND = 1e3;
@@ -620,7 +1055,8 @@ var forget = (args) => {
     return EXIT.error;
   }
   if (!forgetAlias2(query)) {
-    fail(`no confirmed alias for "${query}"`);
+    const declared = loadConfig().aliases.some((alias) => alias.query === normalizeIntent(query));
+    fail(declared ? `"${query}" is declared in ${configFile()}; remove it there` : `no confirmed alias for "${query}"`);
     return EXIT.error;
   }
   note(`cdai: forgot "${query}"`);
@@ -633,9 +1069,9 @@ var runAlias = (args) => {
     return EXIT.ok;
   }
   if (command === "list" && args.length === 1) {
-    const aliases = loadAliases2().aliases;
+    const aliases = allAliases(loadConfig());
     if (aliases.length === 0) note("cdai: no confirmed intent aliases");
-    aliases.forEach((alias) => note(`${alias.query} -> ${contractTilde(alias.path)}`));
+    aliases.forEach((alias) => note(`${alias.query} -> ${contractTilde(alias.path)}${alias.source === "config" ? " (config)" : ""}`));
     return EXIT.ok;
   }
   if (command === "add") return add(args.slice(1));
@@ -1373,7 +1809,7 @@ var runDoctor = (args = []) => {
   if (!compatible) note("       run `cdai index --refresh` to rebuild the cache");
   else if (stale) note("       rebuilt on its own the next time nothing answers");
   note(`db     ${mark(existsSync10(dbFile()))} ${loadDb().records.length} remembered paths`);
-  note(`alias  ${mark(existsSync10(aliasesFile()))} ${loadAliases2().aliases.length} confirmed intents`);
+  note(`alias  ${mark(existsSync10(aliasesFile()))} ${loadAliases2().aliases.length} confirmed intents, ${config.aliases.length} in config`);
   note(`visits ${mark(existsSync10(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable("fzf") !== null)}`);
   note(`tty    ${mark(hasTty())}`);
@@ -1383,89 +1819,6 @@ var runDoctor = (args = []) => {
 
 // src/match/resolve.ts
 import { basename as basename4 } from "node:path";
-
-// src/match/constants.ts
-var SCORE = {
-  exact: 1e3,
-  prefix: 800,
-  wordBoundary: 600,
-  substring: 400,
-  fuzzyMax: 380,
-  /** Token found nowhere in the name but present in the path above it. */
-  pathOnly: 200,
-  none: 0
-};
-var FUZZY = {
-  /** Base share of fuzzyMax awarded for matching all characters at all. */
-  baseShare: 0.45,
-  /** Share awarded proportionally to how densely the characters sit together. */
-  densityShare: 0.35,
-  /** Share awarded for how much of the candidate name the query covers. */
-  coverageShare: 0.2
-};
-var BONUS = {
-  /** Weight of log2(1 + frecency). */
-  frecency: 100,
-  /** Candidate lives under the current working directory. */
-  underCwd: 25,
-  /**
-   * Deterministic tie break: awarded in proportion to how much of the candidate name the
-   * query covers, so "bella" prefers "petalworks" over "petalworks-2026" at equal match class.
-   */
-  brevity: 40
-};
-var THRESHOLD = {
-  /** A single candidate at or above this score wins outright when the gap is big enough. */
-  hit: 550,
-  /** Minimum gap between best and runner up for an outright win. */
-  gap: 200,
-  /** Candidates at or above this score are worth showing in the picker. */
-  candidate: 400,
-  /** Fewer than this many picker-worthy candidates falls through to the AI tier. */
-  minPickerCandidates: 2
-};
-var COMPLETION = {
-  /** Short fuzzy fragments create noisy, destructive shell replacements. */
-  minSmartLength: 3,
-  maxTypoLength: 64
-};
-var LIMIT = {
-  /** Candidates offered to the picker. */
-  picker: 10,
-  /** Fuzzy candidates handed to the AI tier. */
-  aiFuzzy: 30,
-  /** Most frecent paths handed to the AI tier. */
-  aiFrecent: 20,
-  /** Guesses printed when nothing matched. */
-  suggestions: 3
-};
-var STOPWORDS = /* @__PURE__ */ new Set([
-  "folder",
-  "dir",
-  "directory",
-  "the",
-  "project",
-  "go",
-  "to",
-  "my",
-  "in",
-  "of",
-  "a",
-  "an",
-  "for",
-  "from",
-  // How a request is phrased when it points at something: "open this <path>", "show me <name>".
-  "open",
-  "this",
-  "that",
-  "show",
-  "me"
-]);
-var LATEST_WORDS = /* @__PURE__ */ new Set(["latest", "newest", "last", "recent"]);
-var OLDEST_WORDS = /* @__PURE__ */ new Set(["oldest", "first"]);
-var IN_OPERATOR = "in";
-var YEAR_MIN = 1990;
-var YEAR_MAX = 2999;
 
 // node_modules/@franzenzenhofer/intent-core/dist/match/score.js
 var SEGMENT_SPLIT = /[^a-z0-9]+/u;
@@ -1653,6 +2006,8 @@ var MATCH = {
   fuzzy: FUZZY,
   typo: { minLength: COMPLETION.minSmartLength, maxLength: COMPLETION.maxTypoLength }
 };
+var SECONDS_PER_DAY = 86400;
+var MILLIS_PER_SECOND2 = 1e3;
 var fuzzyScore2 = (token, name) => fuzzyScore(token, name, MATCH);
 var matchName2 = (token, name) => matchName(token, name, MATCH);
 var frecencyBonus2 = (frecency2) => frecencyBonus(frecency2, BONUS.frecency);
@@ -1669,6 +2024,20 @@ var brevityBonus = (query, candidate) => {
   const queried = query.tokens.reduce((sum, token) => sum + token.length, 0);
   if (queried === 0 || candidate.name.length === 0) return 0;
   return BONUS.brevity * Math.min(1, queried / candidate.name.length);
+};
+var recencyBonus = (mtimeMs, nowSeconds) => {
+  if (mtimeMs <= 0) return 0;
+  const ageDays = Math.max(0, nowSeconds - mtimeMs / MILLIS_PER_SECOND2) / SECONDS_PER_DAY;
+  return BONUS.recency * 2 ** (-ageDays / RECENCY.halfLifeDays);
+};
+var rootWeight = (candidate, weights) => {
+  if (weights.size === 0) return 0;
+  const indexed = weights.get(candidate.root);
+  if (indexed !== void 0) return indexed;
+  for (const [root, weight] of weights) {
+    if (candidate.path === root || candidate.path.startsWith(`${root}/`)) return weight;
+  }
+  return 0;
 };
 var passesFilters = (query, candidate) => {
   const lowerPath = candidate.path.toLowerCase();
@@ -1691,7 +2060,7 @@ var matchQuality = (query, candidate) => {
 var contextualScore = (query, candidate, context, quality) => {
   const frecency2 = context.frecencyByPath.get(candidate.realPath ?? candidate.path) ?? 0;
   const underCwd = candidate.path !== context.cwd && candidate.path.startsWith(`${context.cwd}/`) ? BONUS.underCwd : 0;
-  return quality + frecencyBonus2(frecency2) + underCwd + brevityBonus(query, candidate);
+  return quality + frecencyBonus2(frecency2) + underCwd + brevityBonus(query, candidate) + recencyBonus(candidate.mtime, context.nowSeconds) + rootWeight(candidate, context.rootWeights);
 };
 var looseScore2 = (query, candidate) => looseScore(query.tokens, candidate.name, MATCH);
 var rankCandidates = (query, candidates, context) => rank(
@@ -1707,240 +2076,6 @@ var rankCandidates = (query, candidates, context) => rank(
   quality: scored.quality,
   score: scored.score
 }));
-
-// node_modules/@franzenzenhofer/intent-core/dist/match/words.js
-var YEAR_PATTERN = /^\d{4}$/u;
-var splitWords = (input) => input.toLowerCase().split(/\s+/u).filter((word) => word !== "");
-var isYear = (token, range) => {
-  if (!YEAR_PATTERN.test(token))
-    return false;
-  const value = Number.parseInt(token, 10);
-  return value >= range.min && value <= range.max;
-};
-var dropStopwords = (words, stopwords) => {
-  const kept = words.filter((word) => !stopwords.has(word));
-  return kept.length > 0 ? kept : [...words];
-};
-
-// node_modules/@franzenzenhofer/intent-core/dist/match/url.js
-var HOST_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/.*)?$/u;
-var TLDS = /* @__PURE__ */ new Set([
-  "com",
-  "net",
-  "org",
-  "info",
-  "biz",
-  "io",
-  "ai",
-  "dev",
-  "app",
-  "co",
-  "me",
-  "tv",
-  "xyz",
-  "cloud",
-  "site",
-  "online",
-  "shop",
-  "blog",
-  "at",
-  "de",
-  "ch",
-  "uk",
-  "eu",
-  "it",
-  "fr",
-  "es",
-  "nl",
-  "pl",
-  "cz",
-  "hu",
-  "si",
-  "sk",
-  "us",
-  "ca",
-  "au",
-  "nz",
-  "jp",
-  "cn",
-  "in",
-  "br"
-]);
-var HOST_NOISE = /* @__PURE__ */ new Set([
-  "www",
-  "m",
-  "web",
-  "shop",
-  "blog",
-  "app",
-  "api",
-  "dev",
-  "staging",
-  "test",
-  "mail",
-  "co",
-  "com",
-  "net",
-  "org",
-  "gov",
-  "gv",
-  "edu",
-  "ac",
-  "github",
-  "gitlab",
-  "bitbucket",
-  "codeberg",
-  "sourceforge",
-  "npmjs",
-  "huggingface",
-  "pages",
-  "workers",
-  "vercel",
-  "netlify",
-  "herokuapp",
-  "replit",
-  "glitch"
-]);
-var PATH_NOISE = /* @__PURE__ */ new Set([
-  "index",
-  "home",
-  "en",
-  "de",
-  "at",
-  "us",
-  "uk",
-  "p",
-  "page",
-  "pages",
-  "blog",
-  "post",
-  "posts",
-  "docs",
-  "doc",
-  "level",
-  "tag",
-  "tags",
-  "category",
-  "search",
-  "www",
-  "main",
-  "master"
-]);
-var URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//u;
-var LOCAL_PATH = /^~|\//u;
-var PATH_DOTS = /* @__PURE__ */ new Set(["", ".", "..", "~"]);
-var PAGE_SUFFIX = /\.(?:html?|php|aspx?|jsp|md)$/u;
-var MIN_NAME_LENGTH = 2;
-var MAX_URL_READINGS = 4;
-var stripScheme = (word) => word.replace(URL_SCHEME, "").replace(/[.,;:!?]+$/u, "");
-var hostLabels = (word) => {
-  const bare = stripScheme(word);
-  if (!HOST_PATTERN.test(bare))
-    return [];
-  const labels = bare.split("/")[0]?.split(".") ?? [];
-  if (!TLDS.has(labels.at(-1) ?? ""))
-    return [];
-  return labels.slice(0, -1).filter((label) => !HOST_NOISE.has(label));
-};
-var pathNames = (word) => {
-  const bare = stripScheme(word);
-  if (!URL_SCHEME.test(word) && !HOST_PATTERN.test(bare))
-    return [];
-  return bare.split("/").slice(1).map((segment) => (segment.split("?")[0] ?? "").replace(PAGE_SUFFIX, "")).filter((segment) => segment.length >= MIN_NAME_LENGTH && !/^\d+$/u.test(segment) && !PATH_NOISE.has(segment)).reverse();
-};
-var localNames = (word) => {
-  if (URL_SCHEME.test(word) || !LOCAL_PATH.test(word))
-    return [];
-  return word.split("/").map((segment) => segment.replace(PAGE_SUFFIX, "")).filter((segment) => !PATH_DOTS.has(segment)).reverse();
-};
-var urlNames = (word) => [...pathNames(word), ...hostLabels(word)];
-var pathReading = (tokens) => {
-  const read = [];
-  const within = [];
-  let spelled = false;
-  for (const token of tokens) {
-    const [deepest, ...above] = localNames(token);
-    if (deepest === void 0) {
-      read.push(token);
-      continue;
-    }
-    spelled = true;
-    read.push(deepest);
-    within.push(...above);
-  }
-  return spelled ? { tokens: read, within } : null;
-};
-var urlReadings = (tokens) => {
-  const names = tokens.map(urlNames);
-  const depth = Math.min(MAX_URL_READINGS, Math.max(0, ...names.map((list) => list.length)));
-  const readings2 = [];
-  for (let level = 0; level < depth; level += 1) {
-    const read = tokens.map((token, index) => {
-      const list = names[index] ?? [];
-      return list[Math.min(level, list.length - 1)] ?? token;
-    });
-    const known = [tokens, ...readings2];
-    if (known.some((seen) => seen.every((token, index) => token === read[index])))
-      continue;
-    readings2.push(read);
-  }
-  return readings2;
-};
-
-// src/match/tokenize.ts
-var YEARS = { min: YEAR_MIN, max: YEAR_MAX };
-var isYear2 = (token) => isYear(token, YEARS);
-var pathReading2 = (query) => {
-  const read = pathReading(query.tokens);
-  if (read === null) return null;
-  return { ...query, tokens: [...read.tokens], within: [...query.within, ...read.within] };
-};
-var urlReadings2 = (query) => urlReadings(query.tokens).map((tokens) => ({ ...query, tokens }));
-var takeRootFilter = (words) => {
-  const rest = [];
-  let rootFilter = null;
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === void 0) continue;
-    const next = words[i + 1];
-    if (word === IN_OPERATOR && next !== void 0 && rootFilter === null) {
-      rootFilter = next;
-      i += 1;
-      continue;
-    }
-    rest.push(word);
-  }
-  return { rest, rootFilter };
-};
-var takeOrder = (words) => {
-  const rest = [];
-  let order = "none";
-  for (const word of words) {
-    if (LATEST_WORDS.has(word) && order === "none") {
-      order = "latest";
-      continue;
-    }
-    if (OLDEST_WORDS.has(word) && order === "none") {
-      order = "oldest";
-      continue;
-    }
-    rest.push(word);
-  }
-  return { rest, order };
-};
-var tokenize = (input) => {
-  const words = splitWords(input);
-  const { rest: afterIn, rootFilter } = takeRootFilter(words);
-  const { rest: afterOrder, order } = takeOrder(afterIn);
-  const years = afterOrder.filter(isYear2);
-  const searchable = afterOrder.filter((word) => !isYear2(word));
-  const tokens = dropStopwords(searchable, STOPWORDS);
-  if (tokens.length === 0 && words.length > 0) {
-    return { raw: input, tokens: words, order: "none", years: [], rootFilter: null, within: [] };
-  }
-  return { raw: input, tokens, order, years, rootFilter, within: [] };
-};
-var tokenizeArgs = (args) => tokenize(args.join(" "));
 
 // src/match/resolve.ts
 var THRESHOLDS = {
@@ -1995,9 +2130,11 @@ var decide2 = (ranked) => {
   return { kind: decision.kind, candidates: decision.candidates.map(asCandidate) };
 };
 var readings = (query) => {
+  const term = termReading(query);
   const spelled = pathReading2(query);
-  return [query, ...spelled === null ? [] : [spelled], ...urlReadings2(query)];
+  return [...term === null ? [] : [term], query, ...spelled === null ? [] : [spelled], ...urlReadings2(query)];
 };
+var weightsOf = (roots) => new Map(roots.flatMap((root) => root.weight === void 0 || root.weight === 0 ? [] : [[root.path, root.weight]]));
 var looseCandidates = (query, input) => {
   const queries = readings(query);
   return buildCandidates(input).map((candidate) => ({
@@ -2005,13 +2142,16 @@ var looseCandidates = (query, input) => {
     score: Math.max(...queries.map((reading) => looseScore2(reading, candidate)))
   })).filter((scored) => scored.score > 0).sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path)).slice(0, LIMIT.aiFuzzy);
 };
+var scoreContext = (input) => ({
+  cwd: input.cwd,
+  frecencyByPath: frecencyMap(input.db, input.nowSeconds),
+  nowSeconds: input.nowSeconds,
+  rootWeights: weightsOf(input.roots)
+});
 var resolveReading = (query, input) => {
-  const context = {
-    cwd: input.cwd,
-    frecencyByPath: frecencyMap(input.db, input.nowSeconds)
-  };
+  const context = scoreContext(input);
   if (query.order !== "none") {
-    const detached = { cwd: "", frecencyByPath: /* @__PURE__ */ new Map() };
+    const detached = { ...context, cwd: "", frecencyByPath: /* @__PURE__ */ new Map() };
     const ordered = dropDescendants2(rankCandidates(query, buildCandidates(input), detached));
     if (ordered.length > 0) return applyOrder(query, ordered, input.index);
   }
@@ -2019,13 +2159,11 @@ var resolveReading = (query, input) => {
   return decide2(ranked);
 };
 var resolveQuery = (query, input) => {
-  const literal = resolveReading(query, input);
-  if (literal.kind !== "unsure") return literal;
-  let unsure = literal;
-  for (const reading of readings(query).slice(1)) {
+  let unsure = { kind: "unsure", candidates: [] };
+  for (const reading of readings(query)) {
     const decision = resolveReading(reading, input);
     if (decision.kind !== "unsure") return decision;
-    if (unsure.candidates.length === 0) unsure = decision;
+    if (unsure.kind === "unsure" && unsure.candidates.length === 0) unsure = decision;
   }
   return unsure;
 };
@@ -2054,6 +2192,7 @@ var CLI_CONTROLS = [
   "index",
   "import",
   "doctor",
+  "config",
   "alias",
   "query",
   "complete",
@@ -2096,7 +2235,7 @@ var aliasWord = (typed, alias) => {
 var completeAliasWords = (args, aliases, config) => {
   const words = stripCdOptions(args);
   if (words.length === 0 || isPathIntent(words)) return [];
-  return aliases.filter((alias) => config.roots.some((root) => isUnder(alias.path, root.path))).map((alias) => aliasWord(words, alias)).filter((word) => word !== void 0);
+  return aliases.filter((alias) => alias.source === "config" || config.roots.some((root) => isUnder(alias.path, root.path))).map((alias) => aliasWord(words, alias)).filter((word) => word !== void 0);
 };
 var completeRootNames = (args, config) => {
   const words = stripCdOptions(args);
@@ -2107,7 +2246,7 @@ var completeRootNames = (args, config) => {
 
 // src/commands/complete.ts
 var COMPLETION_LIMIT = 20;
-var MILLIS_PER_SECOND2 = 1e3;
+var MILLIS_PER_SECOND3 = 1e3;
 var CLI_CONTROL_SET = new Set(CLI_CONTROLS);
 var FUZZY_LIMIT = 5;
 var VALIDATION_ATTEMPT_LIMIT = 512;
@@ -2137,7 +2276,7 @@ var safeCandidates = (args, input) => {
   }
   const query = tokenizeArgs(words);
   if (query.tokens.length === 0) return { candidates: [], nameCounts: /* @__PURE__ */ new Map() };
-  const context = { cwd: input.cwd, frecencyByPath: frecencyMap(input.db, input.nowSeconds) };
+  const context = scoreContext(input);
   const active = words.at(-1)?.toLowerCase() ?? "";
   const ranked = collapseChains2(rankCandidates(query, buildCandidates(input), context));
   const activeMatches = STOPWORDS.has(active) ? [] : ranked.map((scored) => ({ ...scored, completion: smartNameMatch(active, scored.candidate.name) })).filter((item) => item.completion !== void 0);
@@ -2161,13 +2300,13 @@ var completeQuery = (args, input) => {
   return safelyMerge(args, values).slice(0, COMPLETION_LIMIT);
 };
 var runComplete = (args) => {
-  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND2);
+  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND3);
   const config = loadConfig();
   const roots = completeRootNames(args, config);
-  const aliases = loadAliases2().aliases.filter((alias) => isDirectory(alias.path));
+  const aliases = allAliases(config).filter((alias) => isDirectory(alias.path));
   const remembered = completeAliasWords(args, aliases, config).filter((word) => !hasUnsafeCompletionChar(word));
   const index = loadIndex();
-  const indexed = matchesConfig(index, config) ? completeQuery(args, { index, db: loadDb(), cwd: process.cwd(), nowSeconds }) : [];
+  const indexed = matchesConfig(index, config) ? completeQuery(args, { index, db: loadDb(), cwd: process.cwd(), nowSeconds, roots: config.roots }) : [];
   const reserved = remembered.slice(0, FUZZY_LIMIT);
   const indexedLimit = COMPLETION_LIMIT - reserved.length;
   const combined = roots ?? [...indexed.slice(0, indexedLimit), ...reserved];
@@ -2177,12 +2316,48 @@ var runComplete = (args) => {
   return EXIT.ok;
 };
 
+// src/commands/config-cmd.ts
+var CONFIG_USAGE = [
+  "usage:",
+  "  cdai config               print the effective config as JSON, its file on stderr",
+  "  cdai config path          print only the config file path"
+].join("\n");
+var CHANGE_HINTS = [
+  "change it:",
+  "  cdai setup --root <path> [--depth <1-64>] [--weight <n>] --yes   add or update a root",
+  "  cdai setup --remove-root <path>                                remove a root",
+  "  cdai setup --ai | --no-ai                                      AI fallback on or off",
+  "  cdai alias add [<path>] -- <words>                             teach an alias",
+  '  or edit the file: "aliases": { "<words>": "<path>" } win over everything else'
+];
+var show = () => {
+  const config = loadConfig();
+  const state = configExists() ? "valid" : "not written yet, showing defaults";
+  note(`cdai: config ${contractTilde(configFile())} (${state})`);
+  process.stdout.write(serializeConfig(config));
+  CHANGE_HINTS.forEach((line) => note(line));
+  return EXIT.ok;
+};
+var runConfig = (args) => {
+  if (args.length === 0) return show();
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    note(CONFIG_USAGE);
+    return EXIT.ok;
+  }
+  if (args.length === 1 && args[0] === "path") {
+    emit(configFile());
+    return EXIT.ok;
+  }
+  fail(`unknown config command: ${args.join(" ")}`, CONFIG_USAGE);
+  return EXIT.error;
+};
+
 // src/commands/import-zoxide.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync11 } from "node:fs";
 var ZOXIDE = "zoxide";
 var ZOXIDE_ARGS = ["query", "--list", "--score"];
-var MILLIS_PER_SECOND3 = 1e3;
+var MILLIS_PER_SECOND4 = 1e3;
 var MIN_VISITS = 1;
 var parseZoxideList = (stdout, nowSeconds) => {
   const records = [];
@@ -2210,7 +2385,7 @@ var runImportZoxide = () => {
     fail(`zoxide exited with ${String(result.status)}`, result.stderr.trim());
     return EXIT.error;
   }
-  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND3);
+  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND4);
   const imported = parseZoxideList(result.stdout, nowSeconds).filter((r) => existsSync11(r.path));
   updateDb((db) => {
     const byPath = new Map(db.records.map((record) => [record.path, record]));
@@ -2613,7 +2788,7 @@ var spelledPlace = (args) => {
 var nativeCdWords = (args) => args.length <= CD_MAX_NATIVE_ARGS && args.some(isPathShaped);
 
 // src/commands/query.ts
-var MILLIS_PER_SECOND4 = 1e3;
+var MILLIS_PER_SECOND5 = 1e3;
 var suggest = (ranked, context) => {
   if (context.native) return EXIT.native;
   fail(`no match for "${context.query.raw}"`);
@@ -2643,17 +2818,18 @@ var jumpExisting = (path) => {
   }
   return jumpKnown(path);
 };
-var aliasFor = (query) => {
-  const exact = findAlias2(query.raw);
-  if (exact !== void 0) return exact;
-  const phrase = query.tokens.join(" ");
-  if (phrase === "") return void 0;
-  return findAliasWhere2((stored) => tokenize(stored).tokens.join(" ") === phrase);
-};
-var recalledAlias = (context) => {
-  const alias = aliasFor(context.query);
+var recalledAlias = (query, config) => {
+  const alias = recallIntent(query.raw, config);
   if (alias === void 0) return null;
-  const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
+  if (alias.source === "config") {
+    if (isDirectory(alias.path)) return jumpKnown(alias.path);
+    fail(
+      `config alias "${alias.query}" points to a missing directory: ${contractTilde(alias.path)}`,
+      `fix or remove it in ${configFile()}`
+    );
+    return EXIT.error;
+  }
+  const trusted = config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
   forgetAlias2(alias.query);
   return null;
@@ -2737,16 +2913,14 @@ var runQuery = async (args) => {
   const search = searchInput(args, native);
   if (search === null) return native ? EXIT.native : EXIT.error;
   const { query, config } = search;
+  const recalled = recalledAlias(query, config);
+  if (recalled !== null) return recalled;
   const db = ingest();
-  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND4);
+  const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND5);
   const initial = freshIndex(config);
   let refreshed = initial.refreshed;
-  let input = { index: initial.index, db, cwd: process.cwd(), nowSeconds };
+  let input = { index: initial.index, db, cwd: process.cwd(), nowSeconds, roots: config.roots };
   let decision = resolveQuery(query, input);
-  if (decision.kind === "unsure") {
-    const recalled = recalledAlias({ query, config, db, nowSeconds, input, native });
-    if (recalled !== null) return recalled;
-  }
   if (!refreshed && decision.kind === "unsure") {
     input = { ...input, index: refreshIndex(config) };
     refreshed = true;
@@ -2806,7 +2980,8 @@ var detectRoots = (home = homedir2()) => {
 // src/commands/setup-options.ts
 var SETUP_USAGE = [
   "usage: cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]",
-  "                  [--remove-root <path>]",
+  "                  [--weight <-1000..1000>] [--remove-root <path>]",
+  "       --weight adds score points to every directory under --root, so it wins ties",
   "       --yes is required to accept roots without a terminal",
   "       first-time headless setup also requires --ai or --no-ai"
 ].join("\n");
@@ -2814,14 +2989,24 @@ var valueAfter = (args, index, option) => {
   const value = args[index + 1];
   return value === void 0 || value === "" ? { error: `${option} requires a path` } : value;
 };
-var validDepth = (value) => {
-  const parsed = value === void 0 ? Number.NaN : Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_DEPTH ? parsed : null;
+var integerIn = (value, min, max) => {
+  const parsed = value === void 0 || value.trim() === "" ? Number.NaN : Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : null;
+};
+var NUMERIC = {
+  "--depth": { min: 1, max: MAX_DEPTH },
+  "--weight": { min: -WEIGHT_LIMIT, max: WEIGHT_LIMIT }
+};
+var isNumeric = (arg) => arg === "--depth" || arg === "--weight";
+var numericValue = (option, value) => {
+  const { min, max } = NUMERIC[option];
+  const parsed = integerIn(value, min, max);
+  return parsed ?? { error: `${option} must be an integer from ${String(min)} to ${String(max)}` };
 };
 var parseSetupOptions = (args) => {
-  let yes = false, depthSet = false, help = false;
+  let yes = false, help = false;
   let ai = null;
-  let depth = DEFAULT_DEPTH;
+  const numbers = {};
   const roots = [], removeRoots = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -2835,18 +3020,17 @@ var parseSetupOptions = (args) => {
       if (typeof value !== "string") return value;
       (arg === "--root" ? roots : removeRoots).push(value);
       i += 1;
-    } else if (arg === "--depth") {
-      const parsed = validDepth(args[++i]);
-      if (parsed === null) {
-        return { error: `--depth must be an integer from 1 to ${String(MAX_DEPTH)}` };
-      }
-      depth = parsed;
-      depthSet = true;
+    } else if (isNumeric(arg)) {
+      const value = numericValue(arg, args[++i]);
+      if (typeof value !== "number") return value;
+      numbers[arg] = value;
     } else if (arg === "--help" || arg === "-h") help = true;
     else return { error: `unknown setup option: ${arg ?? ""}` };
   }
-  if (depthSet && roots.length === 0) return { error: "--depth requires --root" };
-  return { options: { yes, ai, roots, removeRoots, depth, help } };
+  const orphan = roots.length === 0 ? Object.keys(numbers)[0] : void 0;
+  if (orphan !== void 0) return { error: `${orphan} requires --root` };
+  const depth = numbers["--depth"] ?? DEFAULT_DEPTH, weight = numbers["--weight"] ?? null;
+  return { options: { yes, ai, roots, removeRoots, depth, weight, help } };
 };
 
 // src/commands/setup.ts
@@ -2896,7 +3080,11 @@ var reportAi2 = (ai) => {
   note(`      ${AI_DISCLOSURE}`);
   note("      disable it any time with `cdai setup --no-ai`");
 };
-var explicitRootConfigs = (options) => {
+var explicitRoot = (path, options, existing) => {
+  const weight = options.weight ?? existing.find((root) => root.path === path)?.weight;
+  return weight === void 0 ? { path, depth: options.depth } : { path, depth: options.depth, weight };
+};
+var explicitRoots = (options, existing) => {
   const roots = [];
   for (const raw of options.roots) {
     const path = absolutize(raw);
@@ -2906,7 +3094,7 @@ var explicitRootConfigs = (options) => {
       fail(`setup root is not an existing directory: ${contractTilde(path)}`);
       return null;
     }
-    roots.push({ path, depth: options.depth });
+    roots.push(explicitRoot(path, options, existing));
   }
   return roots;
 };
@@ -2918,7 +3106,7 @@ var setupCandidates = (existing, explicit, detected) => {
     }
   }
   return [...candidates.values()].filter(
-    (root) => !existing.some((known) => known.path === root.path && known.depth === root.depth)
+    (root) => !existing.some((known) => known.path === root.path && known.depth === root.depth && known.weight === root.weight)
   );
 };
 var headlessConsentError = (options, firstSetup, explicitChange) => {
@@ -2959,12 +3147,13 @@ var writeSetup = (existing, options, candidates) => {
   const config = {
     roots,
     ignore: existing.ignore.length > 0 ? existing.ignore : [...DEFAULT_IGNORE],
-    ai: selectedAi(existing, options.ai, options.yes)
+    ai: selectedAi(existing, options.ai, options.yes),
+    aliases: existing.aliases
   };
   return saveAndReport(config, removed);
 };
 var planSetup = (existing, options) => {
-  const explicit = explicitRootConfigs(options);
+  const explicit = explicitRoots(options, existing.roots);
   if (explicit === null) return null;
   const removed = options.removeRoots.map(absolutize);
   const unknown = removed.find((path) => !existing.roots.some((root) => root.path === path));
@@ -3122,7 +3311,8 @@ var managementCompleter = () => `if [ "$COMP_CWORD" -ge 2 ]; then
             [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
           done < <(compgen -d -- "$current") ;;
         --depth) COMPREPLY=( $(compgen -W '1 2 3 4 5 8 16 32 64' -- "$current") ) ;;
-        *) COMPREPLY=( $(compgen -W '--yes --ai --no-ai --root --remove-root --depth --help' -- "$current") ) ;;
+        --weight) COMPREPLY=() ;;
+        *) COMPREPLY=( $(compgen -W '--yes --ai --no-ai --root --remove-root --depth --weight --help' -- "$current") ) ;;
       esac
       return ;;
     index) COMPREPLY=( $(compgen -W '--refresh --help' -- "$current") ); return ;;
@@ -3130,6 +3320,7 @@ var managementCompleter = () => `if [ "$COMP_CWORD" -ge 2 ]; then
     init) COMPREPLY=( $(compgen -W 'zsh bash fish --help' -- "$current") ); return ;;
     import) COMPREPLY=( $(compgen -W 'zoxide --help' -- "$current") ); return ;;
     doctor) COMPREPLY=( $(compgen -W '--help' -- "$current") ); return ;;
+    config) COMPREPLY=( $(compgen -W 'path --help' -- "$current") ); return ;;
   esac
 fi`;
 var replyHelper = () => `__cdai_reply() {
@@ -3325,8 +3516,10 @@ var setupCompleter = () => `function __cdai_setup_complete
             __fish_complete_directories "$argv[-1]"
         case --depth
             printf '%s\\n' 1 2 3 4 5 8 16 32 64
+        case --weight
+            return 0
         case '*'
-            printf '%s\\n' --yes --ai --no-ai --root --remove-root --depth --help
+            printf '%s\\n' --yes --ai --no-ai --root --remove-root --depth --weight --help
     end
 end`;
 var managementCompleter2 = () => `${setupCompleter()}
@@ -3350,6 +3543,9 @@ switch $argv[1]
         return 0
     case doctor
         printf '%s\\n' --help
+        return 0
+    case config
+        printf '%s\\n' path --help
         return 0
 end
 return 1
@@ -3495,12 +3691,13 @@ var completer3 = () => `__cdai_complete() {
   local -a indexed
   if (( CURRENT > 2 )); then
     case "\${words[2]}" in
-      setup) _values 'setup option' --yes --ai --no-ai '--root[path]:directory:_directories' '--remove-root[path]:directory:_directories' '--depth[depth]:depth:' --help; return ;;
+      setup) _values 'setup option' --yes --ai --no-ai '--root[path]:directory:_directories' '--remove-root[path]:directory:_directories' '--depth[depth]:depth:' '--weight[weight]:weight:' --help; return ;;
       index) _values 'index option' --refresh --help; return ;;
       alias) _values 'alias command' list add forget --help; return ;;
       init) _values 'shell' zsh bash fish --help; return ;;
       import) _values 'source' zoxide --help; return ;;
       doctor) _values 'doctor option' --help; return ;;
+      config) _values 'config command' path --help; return ;;
     esac
   fi
   _cd
@@ -3606,8 +3803,9 @@ var USAGE = [
   "  cdai query -- <words>     resolve only, prints the path on stdout",
   "  cdai init <zsh|bash|fish> print the shell integration, meant for eval",
   "  cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <n>]",
-  "             [--remove-root <path>]",
-  "                            configure roots and optional AI fallback",
+  "             [--weight <n>] [--remove-root <path>]",
+  "                            configure roots, root weights and optional AI fallback",
+  "  cdai config [path]        print the effective config and its file, or just the path",
   "  cdai index [--refresh]    show or rebuild the directory index",
   "  cdai import zoxide        seed frecency from an existing zoxide database",
   "  cdai alias <list|add|forget>",
@@ -3618,6 +3816,7 @@ var USAGE = [
   "shell behavior:",
   "  Tab ranks filesystem, index, memory, context, and safe fuzzy intent without crawling or AI.",
   "  zsh/Bash cd flags such as -L and -P also compose with indexed intent.",
+  '  Aliases answer their own words first: "aliases" in config.json, then taught ones.',
   "  Confirmed AI intent is remembered locally; disable AI with setup --no-ai."
 ].join("\n");
 var INIT_TEMPLATES = {
@@ -3677,6 +3876,7 @@ var dispatch = async (args) => {
   if (command === "import") return runImport(args.slice(1));
   if (command === "alias") return runAlias(args.slice(1));
   if (command === "doctor") return runDoctor(args.slice(1));
+  if (command === "config") return runConfig(args.slice(1));
   if (command === "complete") return runComplete(queryArgs(args));
   if (command === "query") return runQueryCommand(args.slice(1));
   return runQuery(args);

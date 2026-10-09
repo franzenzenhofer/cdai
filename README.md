@@ -100,6 +100,7 @@ $ cdai that client with the flowers
 | `cdai latest petalworks folder` | open the newest child directory, by modification time |
 | `cdai oldest petalworks` | open the oldest child directory |
 | `cdai petalworks 2025` | require `2025` somewhere in the matched path |
+| `cdai mobile first workshop` | an order word inside a name is read as part of the name first |
 | `cdai squash in dev` | restrict the search to the matching configured root |
 | `cdai https://tidewheel.orbit.dev` | jump to the project behind a pasted URL |
 | `cdai https://github.com/octocat/tidewheel` | a link is named by what it points at, then by its host |
@@ -159,8 +160,10 @@ cdai <words> <path>       a pasted path wins; a file resolves to its directory
 cdai query -- <words>     resolve only, prints the path on stdout
 cdai init <zsh|bash|fish> print the shell integration, meant for eval
 cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]
-           [--remove-root <path>]
-                          detect or add roots and choose optional AI fallback
+           [--weight <-1000..1000>] [--remove-root <path>]
+                          detect or add roots, weight a root, choose optional AI fallback
+cdai config               print the effective config as JSON (stdout) and its file (stderr)
+cdai config path          print only the config file path
 cdai index [--refresh]    show or rebuild the directory index
 cdai import zoxide        seed frecency from an existing zoxide database
 cdai alias list           show confirmed local intent aliases
@@ -197,6 +200,12 @@ the same alias, because both read as the same intent.
 The directory has to exist and live under a configured root, because an alias outside the roots
 is dropped the moment it is used - so cdai refuses it up front instead of forgetting it later.
 `cdai alias list` shows every remembered name, `cdai alias forget -- <words>` removes one.
+
+An alias answers its own words before any matcher runs, so a name you taught can never be
+outvoted by a fuzzy match or by frecency. The comparison ignores filler words but keeps order
+words and years: an alias for `mobile first` answers `go to the mobile first folder`, never
+`latest mobile` or plain `mobile`. Aliases can also live in `config.json` (see
+[Configuration](#configuration)); those win over taught ones and survive a wiped state directory.
 
 ## Why this exists
 
@@ -251,8 +260,8 @@ cdai: ~/Dropbox/clients/petalworks (petalworks = flowers-themed client name) [Y/
 
 The model is a re-ranker over a set you could print yourself, not a path generator. A missing
 backend, timeout, malformed answer or chatty model degrades to fuzzy suggestions. Confirmed
-answers are stored as bounded local aliases and revalidated before reuse; deterministic matching
-still wins if the tree later gains a better direct match.
+answers are stored as bounded local aliases and revalidated before reuse. A confirmed wording
+answers before the matcher from then on, exactly like a taught alias; `cdai alias forget` drops it.
 
 Corollary, stated plainly: cdai does **not** do semantic search over your whole disk. If the
 directory is neither a fuzzy candidate nor recently used, no amount of LLM will find it.
@@ -312,8 +321,16 @@ source tree.
 ```
 
 **Tier 1 is the product.** Every directory name gets a match class - exact 1000, prefix 800,
-word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecency)` and a small
-bonus for living under your current directory. All tokens must match (AND). A directory and its
+word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecency)`, a small
+bonus for living under your current directory, a small recency bonus (30 points for a folder
+modified today, halving every 30 days) and the weight of its root. All tokens must match (AND).
+Ranking is by match class first, so these bonuses only order equal matches: of several equally
+named rounds of one thing, the one you are working on comes first.
+
+`latest`, `newest`, `last`, `recent`, `oldest` and `first` are operators, but a folder can carry
+them in its name. The typed words are tried as names first, with the order word required in the
+path, so `mobile first workshop` finds `mobile-first-workshops` while `latest petalworks`, whose
+path holds no `latest`, still means the newest petalworks folder. A directory and its
 own parent collapse into one answer, because they are the same place, not two options. Every
 threshold in the diagram lives in one small file: [`src/match/constants.ts`](src/match/constants.ts).
 
@@ -424,18 +441,38 @@ their own privacy and billing policies.
 
 ## Configuration
 
-`~/.config/cdai/config.json` (override with `CDAI_CONFIG_DIR`, data with `CDAI_DATA_DIR`):
+`~/.config/cdai/config.json` (override with `CDAI_CONFIG_DIR`, data with `CDAI_DATA_DIR`).
+`cdai config` prints the effective file with every default filled in, and the commands that
+change it; `cdai config path` prints just the path, for `$EDITOR "$(cdai config path)"`.
 
 ```json
 {
   "roots": [
-    { "path": "/Users/you/dev", "depth": 2 },
-    { "path": "/Users/you/Dropbox/clients", "depth": 3 }
+    { "path": "~/dev", "depth": 2 },
+    { "path": "~/Dropbox/clients", "depth": 3, "weight": 250 }
   ],
   "ignore": ["node_modules", ".git", "dist", "build", ".venv"],
-  "ai": { "enabled": true, "command": "auto", "args": [], "model": "", "timeoutMs": 45000 }
+  "ai": { "enabled": true, "command": "auto", "args": [], "model": "", "timeoutMs": 45000 },
+  "aliases": {
+    "the shop": "~/Dropbox/clients/acme-shop",
+    "nudge game": "~/dev/games/notchi"
+  }
 }
 ```
+
+| Key | Meaning |
+|---|---|
+| `roots[].path` | absolute or `~/` path to index; a bare string is a root at depth 2 |
+| `roots[].depth` | 1 to 64, default 2 |
+| `roots[].weight` | optional, -1000 to 1000 score points for every folder under this root. It never beats a better name match; among equally good ones, 200 or more decides without a picker. `cdai setup --root <path> --weight <n> --yes` sets it |
+| `ignore` | directory names never indexed |
+| `ai` | the optional AI tier, see [AI backends](#ai-backends) |
+| `aliases` | `"words": "path"`, answered before anything else and before taught aliases. A missing target is an error, not a silent skip |
+
+The file is validated strictly. An unknown key, a relative path, a depth of 0, a duplicate root
+or alias, or a wrongly typed value stops cdai with the file and the key named
+(`config error in ~/.config/cdai/config.json: roots[0].depth must be an integer from 1 to 64`),
+instead of quietly falling back to a default. Only an absent key takes its default.
 
 Data lives in `~/.local/share/cdai/`: `index.json` (capped at 50,000 entries and a five-second
 walk), `db.json` (frecency, capped at 10,000 paths), `aliases.json` (confirmed intent, capped at

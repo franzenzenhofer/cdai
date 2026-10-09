@@ -1,104 +1,57 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { absolutize, configFile, writeAtomic } from '@franzenzenhofer/intent-core/paths';
+import { configFile, writeAtomic } from '@franzenzenhofer/intent-core/paths';
 import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
+import { expectKeys, isRecord, readAi, readAliases, readIgnore, readRoots } from './config-read.js';
+import { DEFAULT_AI, DEFAULT_IGNORE, type Config } from './config-types.js';
 
-export const DEFAULT_DEPTH = 2;
-export const MAX_DEPTH = 64;
-export const DEFAULT_IGNORE = [
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.venv',
-  'venv',
-  '__pycache__',
-  '.next',
-  '.cache',
-];
-export const DEFAULT_AI = {
-  enabled: true,
-  command: 'auto',
-  args: [] as string[],
-  model: '',
-  /** Long enough for remote CLI cold starts while still bounding a failed backend. */
-  timeoutMs: 45_000,
-} as const;
+export {
+  DEFAULT_AI, DEFAULT_DEPTH, DEFAULT_IGNORE, MAX_DEPTH, WEIGHT_LIMIT,
+  type AiConfig, type CdaiRoot, type Config, type ConfigAlias, type RootConfig,
+} from './config-types.js';
 
-const MAX_TIMER_MS = 2_147_483_647;
+const TOP_LEVEL_KEYS = ['roots', 'ignore', 'ai', 'aliases'] as const;
 
-export type { RootConfig } from '@franzenzenhofer/intent-core/store/indexer';
-export type { AiConfig } from '@franzenzenhofer/intent-core/ai/backend';
-
-export interface Config {
-  readonly roots: readonly RootConfig[];
-  readonly ignore: readonly string[];
-  readonly ai: AiConfig;
-}
-
-import type { RootConfig } from '@franzenzenhofer/intent-core/store/indexer';
-import type { AiConfig } from '@franzenzenhofer/intent-core/ai/backend';
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const readRoots = (value: unknown): RootConfig[] => {
-  if (!Array.isArray(value)) return [];
-  const roots = new Map<string, RootConfig>();
-  for (const entry of value) {
-    const rawPath = typeof entry === 'string' ? entry : isRecord(entry) ? entry['path'] : undefined;
-    if (typeof rawPath !== 'string' || rawPath.trim() === '') continue;
-    const rawDepth = isRecord(entry) ? entry['depth'] : undefined;
-    const validDepth =
-      typeof rawDepth === 'number' && Number.isFinite(rawDepth) && rawDepth > 0
-        ? Math.min(MAX_DEPTH, Math.floor(rawDepth))
-        : DEFAULT_DEPTH;
-    const path = absolutize(rawPath);
-    roots.set(path, { path, depth: validDepth });
-  }
-  return [...roots.values()];
-};
-
-const readAi = (value: unknown): AiConfig => {
-  if (!isRecord(value)) return { ...DEFAULT_AI };
-  const args = value['args'];
-  const command = value['command'];
-  const timeoutMs = value['timeoutMs'];
-  return {
-    enabled: typeof value['enabled'] === 'boolean' ? value['enabled'] : DEFAULT_AI.enabled,
-    command:
-      typeof command === 'string' && command.trim() !== '' ? command : DEFAULT_AI.command,
-    args: Array.isArray(args) ? args.filter((a): a is string => typeof a === 'string') : [],
-    model: typeof value['model'] === 'string' ? value['model'] : DEFAULT_AI.model,
-    timeoutMs:
-      typeof timeoutMs === 'number' &&
-      Number.isSafeInteger(timeoutMs) &&
-      timeoutMs > 0 &&
-      timeoutMs <= MAX_TIMER_MS
-        ? timeoutMs
-        : DEFAULT_AI.timeoutMs,
-  };
-};
-
-const readIgnore = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [...DEFAULT_IGNORE];
-
-export const emptyConfig = (): Config => ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI } });
+export const emptyConfig = (): Config =>
+  ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI }, aliases: [] });
 
 export const configExists = (): boolean => existsSync(configFile());
 
-export const loadConfig = (): Config => {
-  const file = configFile();
-  if (!existsSync(file)) return emptyConfig();
-  const raw = readFileSync(file, 'utf8');
+const parseConfig = (raw: string): Config => {
   const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) throw new Error(`config is not a JSON object: ${file}`);
+  if (!isRecord(parsed)) throw new Error('must be a JSON object');
+  expectKeys(parsed, TOP_LEVEL_KEYS, 'config');
   return {
     roots: readRoots(parsed['roots']),
     ignore: readIgnore(parsed['ignore']),
     ai: readAi(parsed['ai']),
+    aliases: readAliases(parsed['aliases']),
   };
 };
 
+/** Fails loud, naming the file and the key: a broken config is never replaced by defaults. */
+export const loadConfig = (): Config => {
+  const file = configFile();
+  if (!existsSync(file)) return emptyConfig();
+  try {
+    return parseConfig(readFileSync(file, 'utf8'));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`config error in ${file}: ${reason}`);
+  }
+};
+
+/**
+ * The file's own shape: aliases as a "words": "path" map, and a root's weight only when it has
+ * one, so a config without weights keeps the index fingerprint it always had.
+ */
+export const serializeConfig = (config: Config): string =>
+  `${JSON.stringify({
+    roots: config.roots,
+    ignore: config.ignore,
+    ai: config.ai,
+    aliases: Object.fromEntries(config.aliases.map((alias) => [alias.query, alias.path])),
+  }, null, 2)}\n`;
+
 export const saveConfig = (config: Config): void => {
-  withStateLock(configFile(), () => writeAtomic(configFile(), `${JSON.stringify(config, null, 2)}\n`));
+  withStateLock(configFile(), () => writeAtomic(configFile(), serializeConfig(config)));
 };

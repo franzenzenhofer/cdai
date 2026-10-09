@@ -6,7 +6,7 @@ import {
   type MatchOptions,
 } from '@franzenzenhofer/intent-core/match/score';
 import { rank, type Scored } from '@franzenzenhofer/intent-core/match/decide';
-import { BONUS, COMPLETION, FUZZY, SCORE } from './constants.js';
+import { BONUS, COMPLETION, FUZZY, RECENCY, SCORE } from './constants.js';
 import type { ParsedQuery } from './tokenize.js';
 
 /**
@@ -30,7 +30,13 @@ export interface Candidate {
 export interface ScoreContext {
   readonly cwd: string;
   readonly frecencyByPath: ReadonlyMap<string, number>;
+  readonly nowSeconds: number;
+  /** Configured root path to its weight, only for roots that have one. */
+  readonly rootWeights: ReadonlyMap<string, number>;
 }
+
+const SECONDS_PER_DAY = 86_400;
+const MILLIS_PER_SECOND = 1000;
 
 export interface ScoredCandidate {
   readonly candidate: Candidate;
@@ -65,6 +71,24 @@ const brevityBonus = (query: ParsedQuery, candidate: Candidate): number => {
   const queried = query.tokens.reduce((sum, token) => sum + token.length, 0);
   if (queried === 0 || candidate.name.length === 0) return 0;
   return BONUS.brevity * Math.min(1, queried / candidate.name.length);
+};
+
+/** Index mtimes are milliseconds; a remembered-only directory has none and earns nothing. */
+export const recencyBonus = (mtimeMs: number, nowSeconds: number): number => {
+  if (mtimeMs <= 0) return 0;
+  const ageDays = Math.max(0, nowSeconds - mtimeMs / MILLIS_PER_SECOND) / SECONDS_PER_DAY;
+  return BONUS.recency * 2 ** (-ageDays / RECENCY.halfLifeDays);
+};
+
+/** The weight of the root a candidate was indexed under, or of the root it lives in. */
+export const rootWeight = (candidate: Candidate, weights: ReadonlyMap<string, number>): number => {
+  if (weights.size === 0) return 0;
+  const indexed = weights.get(candidate.root);
+  if (indexed !== undefined) return indexed;
+  for (const [root, weight] of weights) {
+    if (candidate.path === root || candidate.path.startsWith(`${root}/`)) return weight;
+  }
+  return 0;
 };
 
 const passesFilters = (query: ParsedQuery, candidate: Candidate): boolean => {
@@ -109,7 +133,8 @@ const contextualScore = (
     candidate.path !== context.cwd && candidate.path.startsWith(`${context.cwd}/`)
       ? BONUS.underCwd
       : 0;
-  return quality + frecencyBonus(frecency) + underCwd + brevityBonus(query, candidate);
+  return quality + frecencyBonus(frecency) + underCwd + brevityBonus(query, candidate)
+    + recencyBonus(candidate.mtime, context.nowSeconds) + rootWeight(candidate, context.rootWeights);
 };
 
 /**

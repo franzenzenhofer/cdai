@@ -4,31 +4,18 @@ import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseZoxideList } from '../src/commands/import-zoxide.js';
 import { CLOUD_DEPTH, DEV_DEPTH, HUB_MIN_CHILDREN, detectRoots } from '../src/commands/detect.js';
-import { DEFAULT_AI, loadConfig } from '../src/config.js';
+import { loadConfig } from '../src/config.js';
 import { DAY_SECONDS } from '@franzenzenhofer/intent-core/store/frecency';
 import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
+import { BIN, buildBundle, runCliIn, type CliRun } from './cli.js';
 import packageJson from '../package.json' with { type: 'json' };
 
-const REPO = process.cwd();
-const BIN = join(REPO, 'dist', 'cdai.js');
 const NOW = 1_800_000_000;
 const EXIT_NATIVE = 4;
 
 let fixture: Fixture;
 
-const runCli = (...args: string[]): { status: number; stdout: string; stderr: string } => {
-  const result = spawnSync('node', [BIN, ...args], {
-    encoding: 'utf8',
-    cwd: fixture.rootDir,
-    env: {
-      PATH: process.env['PATH'] ?? '',
-      HOME: fixture.rootDir,
-      CDAI_CONFIG_DIR: fixture.configDir,
-      CDAI_DATA_DIR: fixture.dataDir,
-    },
-  });
-  return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
-};
+const runCli = (...args: string[]): CliRun => runCliIn(fixture, args);
 
 const runCliWithTty = (input: string, ...args: string[]) => {
   const python = [
@@ -51,7 +38,7 @@ const runCliWithTty = (input: string, ...args: string[]) => {
 };
 
 beforeAll(() => {
-  expect(spawnSync('node', [join(REPO, 'scripts', 'build.mjs')], { encoding: 'utf8' }).status).toBe(0);
+  expect(buildBundle()).toBe(0);
 });
 
 beforeEach(() => {
@@ -477,12 +464,13 @@ describe('cli surface', () => {
     delete process.env['CDAI_CONFIG_DIR'];
   });
 
-  it('sanitizes invalid AI command, argument, and timeout values', () => {
+  it('refuses an invalid AI setting instead of quietly replacing it', () => {
     writeConfig(fixture, { command: ' ', args: ['--flag', 42], timeoutMs: 1.5 });
-    const config = loadConfigFrom(fixture);
-    expect(config.ai.command).toBe('auto');
-    expect(config.ai.args).toEqual(['--flag']);
-    expect(config.ai.timeoutMs).toBe(DEFAULT_AI.timeoutMs);
+    expect(() => loadConfigFrom(fixture)).toThrow('ai.command must be a non-empty string');
+    const run = runCli('query', '--', 'petal');
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('config error in');
+    expect(run.stdout).toBe('');
   });
 
   it('fails with usage when there is nothing to search for', () => {

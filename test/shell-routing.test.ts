@@ -20,6 +20,7 @@ const CONTROL_ARGS: Record<CliControl, readonly string[]> = {
   index: ['index', '--refresh'],
   import: ['import', 'zoxide'],
   doctor: ['doctor'],
+  config: ['config', 'path'],
   alias: ['alias', 'list'],
   query: ['query', '--', 'petal'],
   complete: ['complete', '--', 'pet'],

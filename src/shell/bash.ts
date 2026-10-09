@@ -120,7 +120,8 @@ const managementCompleter = (): string => `if [ "$COMP_CWORD" -ge 2 ]; then
             [ -n "$candidate" ] && COMPREPLY[\${#COMPREPLY[@]}]="$candidate"
           done < <(compgen -d -- "$current") ;;
         --depth) COMPREPLY=( $(compgen -W '1 2 3 4 5 8 16 32 64' -- "$current") ) ;;
-        *) COMPREPLY=( $(compgen -W '--yes --ai --no-ai --root --remove-root --depth --help' -- "$current") ) ;;
+        --weight) COMPREPLY=() ;;
+        *) COMPREPLY=( $(compgen -W '--yes --ai --no-ai --root --remove-root --depth --weight --help' -- "$current") ) ;;
       esac
       return ;;
     index) COMPREPLY=( $(compgen -W '--refresh --help' -- "$current") ); return ;;
@@ -128,6 +129,7 @@ const managementCompleter = (): string => `if [ "$COMP_CWORD" -ge 2 ]; then
     init) COMPREPLY=( $(compgen -W 'zsh bash fish --help' -- "$current") ); return ;;
     import) COMPREPLY=( $(compgen -W 'zoxide --help' -- "$current") ); return ;;
     doctor) COMPREPLY=( $(compgen -W '--help' -- "$current") ); return ;;
+    config) COMPREPLY=( $(compgen -W 'path --help' -- "$current") ); return ;;
   esac
 fi`;
 

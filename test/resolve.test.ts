@@ -26,6 +26,7 @@ beforeEach(() => {
     db: emptyDb(),
     cwd: fixture.rootDir,
     nowSeconds: NOW_SECONDS,
+    roots: loadConfig().roots,
   };
 });
 

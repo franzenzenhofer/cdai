@@ -18,6 +18,8 @@ export interface ParsedQuery {
   /** Search terms, lowercased, operators and stopwords removed. */
   readonly tokens: readonly string[];
   readonly order: Order;
+  /** The word read as `order`, kept because it may just as well be part of a name. */
+  readonly orderWord: string | null;
   /** Year tokens act as required substrings of the candidate path. */
   readonly years: readonly string[];
   /** `in <name>`: only candidates whose root path contains this name qualify. */
@@ -68,36 +70,68 @@ const takeRootFilter = (words: readonly string[]): OperatorScan => {
   return { rest, rootFilter };
 };
 
-const takeOrder = (words: readonly string[]): { rest: string[]; order: Order } => {
+interface OrderScan {
+  readonly rest: string[];
+  readonly order: Order;
+  readonly orderWord: string | null;
+}
+
+const orderOf = (word: string): Order => {
+  if (LATEST_WORDS.has(word)) return 'latest';
+  return OLDEST_WORDS.has(word) ? 'oldest' : 'none';
+};
+
+const takeOrder = (words: readonly string[]): OrderScan => {
   const rest: string[] = [];
   let order: Order = 'none';
+  let orderWord: string | null = null;
   for (const word of words) {
-    if (LATEST_WORDS.has(word) && order === 'none') {
-      order = 'latest';
+    const wordOrder: Order = order === 'none' ? orderOf(word) : 'none';
+    if (wordOrder === 'none') {
+      rest.push(word);
       continue;
     }
-    if (OLDEST_WORDS.has(word) && order === 'none') {
-      order = 'oldest';
-      continue;
-    }
-    rest.push(word);
+    order = wordOrder;
+    orderWord = word;
   }
-  return { rest, order };
+  return { rest, order, orderWord };
 };
+
+/**
+ * The same query with its order word read as part of a name, not as an operator: "mobile first
+ * workshop" names a folder before it asks for the oldest of anything. The word must appear in the
+ * path literally, so "latest petalworks" finds nothing this way and keeps its operator meaning.
+ */
+export const termReading = (query: ParsedQuery): ParsedQuery | null => {
+  if (query.orderWord === null) return null;
+  return {
+    ...query,
+    tokens: [...query.tokens, query.orderWord],
+    order: 'none',
+    orderWord: null,
+    within: [...query.within, query.orderWord],
+  };
+};
+
+/**
+ * What two typings of one intent share: every word but the filler. Order words and years stay, so
+ * a remembered "mobile first" never answers "latest mobile" or plain "mobile".
+ */
+export const intentKey = (input: string): string => dropStopwords(splitWords(input), STOPWORDS).join(' ');
 
 export const tokenize = (input: string): ParsedQuery => {
   const words = splitWords(input);
   const { rest: afterIn, rootFilter } = takeRootFilter(words);
-  const { rest: afterOrder, order } = takeOrder(afterIn);
+  const { rest: afterOrder, order, orderWord } = takeOrder(afterIn);
   const years = afterOrder.filter(isYear);
   const searchable = afterOrder.filter((word) => !isYear(word));
   // A directory may literally be named "project" or "folder"; stopwords cannot erase intent.
   const tokens = dropStopwords(searchable, STOPWORDS);
   // An operator or year can also be a literal directory name when it is the entire query.
   if (tokens.length === 0 && words.length > 0) {
-    return { raw: input, tokens: words, order: 'none', years: [], rootFilter: null, within: [] };
+    return { raw: input, tokens: words, order: 'none', orderWord: null, years: [], rootFilter: null, within: [] };
   }
-  return { raw: input, tokens, order, years, rootFilter, within: [] };
+  return { raw: input, tokens, order, orderWord, years, rootFilter, within: [] };
 };
 
 export const tokenizeArgs = (args: readonly string[]): ParsedQuery => tokenize(args.join(' '));

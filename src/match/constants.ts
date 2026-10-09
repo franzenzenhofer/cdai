@@ -32,6 +32,16 @@ export const BONUS = {
    * query covers, so "bella" prefers "petalworks" over "petalworks-2026" at equal match class.
    */
   brevity: 40,
+  /**
+   * Awarded in full to a directory modified just now, halving every RECENCY.halfLifeDays. Below
+   * every match class gap, so it only orders equal matches: of several equally named rounds of
+   * one thing, the one being worked on comes first.
+   */
+  recency: 30,
+} as const;
+
+export const RECENCY = {
+  halfLifeDays: 30,
 } as const;
 
 /** Decision thresholds for resolve(). */

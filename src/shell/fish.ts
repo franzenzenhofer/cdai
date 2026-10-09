@@ -103,8 +103,10 @@ const setupCompleter = (): string => `function __cdai_setup_complete
             __fish_complete_directories "$argv[-1]"
         case --depth
             printf '%s\\n' 1 2 3 4 5 8 16 32 64
+        case --weight
+            return 0
         case '*'
-            printf '%s\\n' --yes --ai --no-ai --root --remove-root --depth --help
+            printf '%s\\n' --yes --ai --no-ai --root --remove-root --depth --weight --help
     end
 end`;
 
@@ -129,6 +131,9 @@ switch $argv[1]
         return 0
     case doctor
         printf '%s\\n' --help
+        return 0
+    case config
+        printf '%s\\n' path --help
         return 0
 end
 return 1

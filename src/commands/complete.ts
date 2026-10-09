@@ -1,4 +1,4 @@
-import { collapseChains, buildCandidates, frecencyMap, type ResolveInput } from '../match/resolve.js';
+import { collapseChains, buildCandidates, scoreContext, type ResolveInput } from '../match/resolve.js';
 import { rankCandidates, type ScoredCandidate } from '../match/score.js';
 import {
   completionKindRank,
@@ -12,7 +12,7 @@ import { loadConfig } from '../config.js';
 import { loadDb } from '../store/db.js';
 import { loadIndex, matchesConfig } from '@franzenzenhofer/intent-core/store/indexer';
 import { CLI_CONTROLS, stripCdOptions } from '../shell/control.js';
-import { loadAliases } from '../store/aliases.js';
+import { allAliases } from './alias-recall.js';
 import { isDirectory } from '@franzenzenhofer/intent-core/paths';
 import { completeAliasWords, completeRootNames } from './completion-aliases.js';
 
@@ -66,7 +66,7 @@ const safeCandidates = (args: readonly string[], input: ResolveInput): Completio
   }
   const query = tokenizeArgs(words);
   if (query.tokens.length === 0) return { candidates: [], nameCounts: new Map() };
-  const context = { cwd: input.cwd, frecencyByPath: frecencyMap(input.db, input.nowSeconds) };
+  const context = scoreContext(input);
   const active = words.at(-1)?.toLowerCase() ?? '';
   const ranked = collapseChains(rankCandidates(query, buildCandidates(input), context));
   const activeMatches = STOPWORDS.has(active) ? [] : ranked
@@ -111,12 +111,12 @@ export const runComplete = (args: readonly string[]): ExitCode => {
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
   const config = loadConfig();
   const roots = completeRootNames(args, config);
-  const aliases = loadAliases().aliases.filter((alias) => isDirectory(alias.path));
+  const aliases = allAliases(config).filter((alias) => isDirectory(alias.path));
   const remembered = completeAliasWords(args, aliases, config)
     .filter((word) => !hasUnsafeCompletionChar(word));
   const index = loadIndex();
   const indexed = matchesConfig(index, config)
-    ? completeQuery(args, { index, db: loadDb(), cwd: process.cwd(), nowSeconds })
+    ? completeQuery(args, { index, db: loadDb(), cwd: process.cwd(), nowSeconds, roots: config.roots })
     : [];
   const reserved = remembered.slice(0, FUZZY_LIMIT);
   const indexedLimit = COMPLETION_LIMIT - reserved.length;

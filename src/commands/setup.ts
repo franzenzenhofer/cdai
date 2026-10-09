@@ -7,8 +7,8 @@ import {
   loadConfig,
   saveConfig,
   type AiConfig,
+  type CdaiRoot,
   type Config,
-  type RootConfig,
 } from '../config.js';
 import { absolutize, configFile, contractTilde } from '@franzenzenhofer/intent-core/paths';
 import { confirm, hasTty } from '@franzenzenhofer/intent-core/picker';
@@ -33,13 +33,13 @@ export const currentShell = (): string => {
   return name in SHELL_LINES ? name : DEFAULT_SHELL;
 };
 
-const mergeRoots = (existing: readonly RootConfig[], added: readonly RootConfig[]): RootConfig[] => {
+const mergeRoots = (existing: readonly CdaiRoot[], added: readonly CdaiRoot[]): CdaiRoot[] => {
   const byPath = new Map(existing.map((root) => [root.path, root]));
   for (const root of added) byPath.set(root.path, root);
   return [...byPath.values()];
 };
 
-const acceptedRoots = (candidates: readonly RootConfig[], all: boolean): RootConfig[] => {
+const acceptedRoots = (candidates: readonly CdaiRoot[], all: boolean): CdaiRoot[] => {
   if (!all) {
     return candidates.filter((root) =>
       confirm(`cdai: learn ${contractTilde(root.path)} (depth ${root.depth})?`),
@@ -70,8 +70,14 @@ const reportAi = (ai: AiConfig): void => {
   note('      disable it any time with `cdai setup --no-ai`');
 };
 
-const explicitRootConfigs = (options: SetupOptions): RootConfig[] | null => {
-  const roots: RootConfig[] = [];
+/** A root named again keeps its weight unless --weight says otherwise. */
+const explicitRoot = (path: string, options: SetupOptions, existing: readonly CdaiRoot[]): CdaiRoot => {
+  const weight = options.weight ?? existing.find((root) => root.path === path)?.weight;
+  return weight === undefined ? { path, depth: options.depth } : { path, depth: options.depth, weight };
+};
+
+const explicitRoots = (options: SetupOptions, existing: readonly CdaiRoot[]): CdaiRoot[] | null => {
+  const roots: CdaiRoot[] = [];
   for (const raw of options.roots) {
     const path = absolutize(raw);
     try {
@@ -80,16 +86,16 @@ const explicitRootConfigs = (options: SetupOptions): RootConfig[] | null => {
       fail(`setup root is not an existing directory: ${contractTilde(path)}`);
       return null;
     }
-    roots.push({ path, depth: options.depth });
+    roots.push(explicitRoot(path, options, existing));
   }
   return roots;
 };
 
 const setupCandidates = (
-  existing: readonly RootConfig[],
-  explicit: readonly RootConfig[],
-  detected: readonly RootConfig[],
-): RootConfig[] => {
+  existing: readonly CdaiRoot[],
+  explicit: readonly CdaiRoot[],
+  detected: readonly CdaiRoot[],
+): CdaiRoot[] => {
   const candidates = new Map(explicit.map((root) => [root.path, root]));
   for (const root of detected) {
     if (!candidates.has(root.path) && !existing.some((known) => known.path === root.path)) {
@@ -97,7 +103,8 @@ const setupCandidates = (
     }
   }
   return [...candidates.values()].filter((root) =>
-    !existing.some((known) => known.path === root.path && known.depth === root.depth),
+    !existing.some((known) =>
+      known.path === root.path && known.depth === root.depth && known.weight === root.weight),
   );
 };
 
@@ -127,7 +134,7 @@ const saveAndReport = (config: Config, removed: ReadonlySet<string>): ExitCode =
   return index.truncated === null ? EXIT.ok : EXIT.error;
 };
 
-const writeSetup = (existing: Config, options: SetupOptions, candidates: RootConfig[]): ExitCode => {
+const writeSetup = (existing: Config, options: SetupOptions, candidates: CdaiRoot[]): ExitCode => {
   if (candidates.length > 0) note('cdai: proposed project roots');
   const accepted = acceptedRoots(candidates, options.yes);
   const removed = new Set(options.removeRoots.map(absolutize));
@@ -146,18 +153,19 @@ const writeSetup = (existing: Config, options: SetupOptions, candidates: RootCon
     roots,
     ignore: existing.ignore.length > 0 ? existing.ignore : [...DEFAULT_IGNORE],
     ai: selectedAi(existing, options.ai, options.yes),
+    aliases: existing.aliases,
   };
   return saveAndReport(config, removed);
 };
 
 interface SetupPlan {
-  readonly candidates: readonly RootConfig[];
-  readonly explicit: readonly RootConfig[];
+  readonly candidates: readonly CdaiRoot[];
+  readonly explicit: readonly CdaiRoot[];
   readonly removed: readonly string[];
 }
 
 const planSetup = (existing: Config, options: SetupOptions): SetupPlan | null => {
-  const explicit = explicitRootConfigs(options);
+  const explicit = explicitRoots(options, existing.roots);
   if (explicit === null) return null;
   const removed = options.removeRoots.map(absolutize);
   const unknown = removed.find((path) => !existing.roots.some((root) => root.path === path));

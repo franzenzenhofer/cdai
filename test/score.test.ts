@@ -21,6 +21,8 @@ const candidate = (path: string, mtime = 0, root = '/roots/dev'): Candidate => (
 const context = (frecency: ReadonlyArray<readonly [string, number]> = [], cwd = '/nowhere'): ScoreContext => ({
   cwd,
   frecencyByPath: new Map(frecency),
+  nowSeconds: 0,
+  rootWeights: new Map(),
 });
 
 describe('matchName', () => {

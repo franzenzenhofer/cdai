@@ -5,19 +5,14 @@ import { loadConfig, type Config } from '../config.js';
 import { LIMIT } from '../match/constants.js';
 import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import type { ScoredCandidate } from '../match/score.js';
-import { tokenize, tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import { contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
+import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
+import { configFile, contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
+import { recallIntent } from './alias-recall.js';
 import { nativeCdWords, spelledPlace } from '../match/literal.js';
 import { confirm, hasTty, pick, toItems } from '@franzenzenhofer/intent-core/picker';
 import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
 import { ingest, type Db } from '../store/db.js';
-import {
-  findAlias,
-  findAliasWhere,
-  forgetAlias,
-  rememberAlias,
-  type IntentAlias,
-} from '../store/aliases.js';
+import { forgetAlias, rememberAlias } from '../store/aliases.js';
 import { loadIndex, matchesConfig, refreshIndex, type DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
 
 const MILLIS_PER_SECOND = 1000;
@@ -74,19 +69,21 @@ const jumpExisting = (path: string): ExitCode => {
   return jumpKnown(path);
 };
 
-/** The stopwords a query drops are exactly the words two typings of one intent disagree on. */
-const aliasFor = (query: ParsedQuery): IntentAlias | undefined => {
-  const exact = findAlias(query.raw);
-  if (exact !== undefined) return exact;
-  const phrase = query.tokens.join(' ');
-  if (phrase === '') return undefined;
-  return findAliasWhere((stored) => tokenize(stored).tokens.join(' ') === phrase);
-};
-
-const recalledAlias = (context: QueryContext): ExitCode | null => {
-  const alias = aliasFor(context.query);
+/**
+ * A named directory is the answer before any matcher guesses. A broken config alias is the
+ * user's own file being wrong, so it is reported rather than skipped; a taught one whose target
+ * vanished or left the roots is forgotten and the search goes on.
+ */
+const recalledAlias = (query: ParsedQuery, config: Config): ExitCode | null => {
+  const alias = recallIntent(query.raw, config);
   if (alias === undefined) return null;
-  const trusted = context.config.roots.some((root) => isUnderRoot(alias.path, root.path));
+  if (alias.source === 'config') {
+    if (isDirectory(alias.path)) return jumpKnown(alias.path);
+    fail(`config alias "${alias.query}" points to a missing directory: ${contractTilde(alias.path)}`,
+      `fix or remove it in ${configFile()}`);
+    return EXIT.error;
+  }
+  const trusted = config.roots.some((root) => isUnderRoot(alias.path, root.path));
   if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
   forgetAlias(alias.query);
   return null;
@@ -195,16 +192,14 @@ export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
   const search = searchInput(args, native);
   if (search === null) return native ? EXIT.native : EXIT.error;
   const { query, config } = search;
+  const recalled = recalledAlias(query, config);
+  if (recalled !== null) return recalled;
   const db = ingest();
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
   const initial = freshIndex(config);
   let refreshed = initial.refreshed;
-  let input: ResolveInput = { index: initial.index, db, cwd: process.cwd(), nowSeconds };
+  let input: ResolveInput = { index: initial.index, db, cwd: process.cwd(), nowSeconds, roots: config.roots };
   let decision = resolveQuery(query, input);
-  if (decision.kind === 'unsure') {
-    const recalled = recalledAlias({ query, config, db, nowSeconds, input, native });
-    if (recalled !== null) return recalled;
-  }
   // Nothing answered, so the one thing that can change the answer is data we do not have yet.
   // A folder made since the last scan is invisible however recent that scan was, and rebuilding
   // it costs a fraction of the AI call it precedes - so this is a rescan, never a question.

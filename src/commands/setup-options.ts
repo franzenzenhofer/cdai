@@ -1,8 +1,9 @@
-import { DEFAULT_DEPTH, MAX_DEPTH } from '../config.js';
+import { DEFAULT_DEPTH, MAX_DEPTH, WEIGHT_LIMIT } from '../config.js';
 
 export const SETUP_USAGE = [
   'usage: cdai setup [--yes] [--ai|--no-ai] [--root <path>] [--depth <1-64>]',
-  '                  [--remove-root <path>]',
+  '                  [--weight <-1000..1000>] [--remove-root <path>]',
+  '       --weight adds score points to every directory under --root, so it wins ties',
   '       --yes is required to accept roots without a terminal',
   '       first-time headless setup also requires --ai or --no-ai',
 ].join('\n');
@@ -13,6 +14,8 @@ export interface SetupOptions {
   readonly roots: readonly string[];
   readonly removeRoots: readonly string[];
   readonly depth: number;
+  /** null keeps whatever weight the root already has. */
+  readonly weight: number | null;
   readonly help: boolean;
 }
 
@@ -23,15 +26,31 @@ const valueAfter = (args: readonly string[], index: number, option: string): str
   return value === undefined || value === '' ? { error: `${option} requires a path` } : value;
 };
 
-const validDepth = (value: string | undefined): number | null => {
-  const parsed = value === undefined ? Number.NaN : Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_DEPTH ? parsed : null;
+const integerIn = (value: string | undefined, min: number, max: number): number | null => {
+  const parsed = value === undefined || value.trim() === '' ? Number.NaN : Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : null;
+};
+
+/** Integer options and their bounds, worded the way the error states them. */
+const NUMERIC = {
+  '--depth': { min: 1, max: MAX_DEPTH },
+  '--weight': { min: -WEIGHT_LIMIT, max: WEIGHT_LIMIT },
+} as const;
+
+type NumericOption = keyof typeof NUMERIC;
+
+const isNumeric = (arg: string | undefined): arg is NumericOption => arg === '--depth' || arg === '--weight';
+
+const numericValue = (option: NumericOption, value: string | undefined): number | ParsedSetup => {
+  const { min, max } = NUMERIC[option];
+  const parsed = integerIn(value, min, max);
+  return parsed ?? { error: `${option} must be an integer from ${String(min)} to ${String(max)}` };
 };
 
 export const parseSetupOptions = (args: readonly string[]): ParsedSetup => {
-  let yes = false, depthSet = false, help = false;
+  let yes = false, help = false;
   let ai: boolean | null = null;
-  let depth = DEFAULT_DEPTH;
+  const numbers: Partial<Record<NumericOption, number>> = {};
   const roots: string[] = [], removeRoots: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -45,16 +64,15 @@ export const parseSetupOptions = (args: readonly string[]): ParsedSetup => {
       if (typeof value !== 'string') return value;
       (arg === '--root' ? roots : removeRoots).push(value);
       i += 1;
-    } else if (arg === '--depth') {
-      const parsed = validDepth(args[++i]);
-      if (parsed === null) {
-        return { error: `--depth must be an integer from 1 to ${String(MAX_DEPTH)}` };
-      }
-      depth = parsed;
-      depthSet = true;
+    } else if (isNumeric(arg)) {
+      const value = numericValue(arg, args[++i]);
+      if (typeof value !== 'number') return value;
+      numbers[arg] = value;
     } else if (arg === '--help' || arg === '-h') help = true;
     else return { error: `unknown setup option: ${arg ?? ''}` };
   }
-  if (depthSet && roots.length === 0) return { error: '--depth requires --root' };
-  return { options: { yes, ai, roots, removeRoots, depth, help } };
+  const orphan = roots.length === 0 ? (Object.keys(numbers) as NumericOption[])[0] : undefined;
+  if (orphan !== undefined) return { error: `${orphan} requires --root` };
+  const depth = numbers['--depth'] ?? DEFAULT_DEPTH, weight = numbers['--weight'] ?? null;
+  return { options: { yes, ai, roots, removeRoots, depth, weight, help } };
 };

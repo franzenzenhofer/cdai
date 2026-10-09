@@ -70,7 +70,7 @@ export const runDoctor = (args: readonly string[] = []): ExitCode => {
   if (!compatible) note('       run `cdai index --refresh` to rebuild the cache');
   else if (stale) note('       rebuilt on its own the next time nothing answers');
   note(`db     ${mark(existsSync(dbFile()))} ${loadDb().records.length} remembered paths`);
-  note(`alias  ${mark(existsSync(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents`);
+  note(`alias  ${mark(existsSync(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents, ${config.aliases.length} in config`);
   note(`visits ${mark(existsSync(visitsLog()))} ${visitsLog()}`);
   note(`fzf    ${mark(resolveExecutable('fzf') !== null)}`);
   note(`tty    ${mark(hasTty())}`);

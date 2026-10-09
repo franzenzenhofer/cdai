@@ -329,3 +329,28 @@
   - Exact query and completion enforce median/p95 budgets.
   - `npm pack` output installs and runs successfully.
   - Rebuilding leaves committed `dist/cdai.js` unchanged.
+
+### TCK-014: Let explicit intent win, read order words inside names, and make config strict
+
+- Status: Done on main after 0.4.0
+- Epic: EPIC-002
+- Type: Bug
+- Severity: S1
+- Priority: P1
+- Persona: P2
+- Scenario: Jump to a recurring workshop whose folder name contains an order word, then teach the right answer.
+- Steps:
+  1. Have `clients/mobile-first-workshops/<rounds>` next to an older `clients/mobile-workshop-2024/books`.
+  2. Run `cdai mobile first workshop`.
+  3. Run `cdai alias add <newest round> -- mobile first workshop` and repeat step 2.
+- Expected: The workshop folder (or the taught round) is the answer; a taught alias always wins for its own words.
+- Actual: "first" was consumed as the `oldest` operator, so the oldest child of every `mobile ... workshop` match won (`books`). Aliases were consulted only when the matcher was unsure, so the taught alias never answered.
+- IS: Fixed on main after 0.4.0. Aliases (config.json first, then taught) answer before the matcher, keyed on the words minus filler, keeping order words and years. An order word is tried as a name word first, required literally in the path. A recency bonus orders equal matches newest first. config.json is validated strictly, gains `aliases` and per-root `weight`, and `cdai config` shows it.
+- SHOULD: What the user named explicitly beats every inference; a typo in config is an error naming the key.
+- Reasoning: Aliases were built as memory of AI answers and kept that last-resort slot when `alias add` arrived.
+- Code hints: `src/commands/query.ts`, `src/commands/alias-recall.ts`, `src/match/tokenize.ts` (`termReading`, `intentKey`), `src/match/score.ts`, `src/config-read.ts`, `src/commands/config-cmd.ts`.
+- Acceptance criteria:
+  - A taught alias wins over a confident matcher hit for its words and never answers a different ordered query.
+  - "mobile first workshop" resolves to the workshop folder even when the older workshop is frecent.
+  - Equally matching siblings rank newest first.
+  - Invalid config fails with file and key named; config aliases win and survive setup.

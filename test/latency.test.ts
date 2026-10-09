@@ -128,7 +128,7 @@ describe('latency', () => {
     };
     const started = process.cpuUsage();
     expect(completeQuery(['abcdefgh'], {
-      index, db: emptyDb(), cwd: fixture.rootDir, nowSeconds: Math.floor(Date.now() / 1000),
+      index, db: emptyDb(), cwd: fixture.rootDir, nowSeconds: Math.floor(Date.now() / 1000), roots: [],
     })).toHaveLength(1);
     expect(elapsedCpuMs(started)).toBeLessThan(LARGE_CORE_BUDGET_MS);
   });

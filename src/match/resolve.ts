@@ -7,7 +7,8 @@ import {
   type ScoreContext,
   type ScoredCandidate,
 } from './score.js';
-import { pathReading, urlReadings, type ParsedQuery } from './tokenize.js';
+import { pathReading, termReading, urlReadings, type ParsedQuery } from './tokenize.js';
+import type { CdaiRoot } from '../config.js';
 import type { DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
 import { childrenOf } from '@franzenzenhofer/intent-core/store/indexer';
 import type { Db } from '../store/db.js';
@@ -26,6 +27,7 @@ export interface ResolveInput {
   readonly db: Db;
   readonly cwd: string;
   readonly nowSeconds: number;
+  readonly roots: readonly CdaiRoot[];
 }
 
 export type Decision =
@@ -129,13 +131,17 @@ export const decide = (ranked: readonly ScoredCandidate[]): Decision => {
 };
 
 /**
- * Every reading of the query, best understood first: what was typed, the path it spells out, then
- * its words as the names a link stands for.
+ * Every reading of the query, best understood first: an order word as part of the name it is
+ * typed into, what was typed, the path it spells out, then its words as the names a link stands for.
  */
 const readings = (query: ParsedQuery): ParsedQuery[] => {
+  const term = termReading(query);
   const spelled = pathReading(query);
-  return [query, ...(spelled === null ? [] : [spelled]), ...urlReadings(query)];
+  return [...(term === null ? [] : [term]), query, ...(spelled === null ? [] : [spelled]), ...urlReadings(query)];
 };
+
+const weightsOf = (roots: readonly CdaiRoot[]): Map<string, number> =>
+  new Map(roots.flatMap((root) => (root.weight === undefined || root.weight === 0 ? [] : [[root.path, root.weight]])));
 
 /** Best guesses for the AI tier when the strict matcher came back empty handed. */
 export const looseCandidates = (query: ParsedQuery, input: ResolveInput): ScoredCandidate[] => {
@@ -150,15 +156,20 @@ export const looseCandidates = (query: ParsedQuery, input: ResolveInput): Scored
     .slice(0, LIMIT.aiFuzzy);
 };
 
+/** Everything about this moment and this machine that ranks equal matches. */
+export const scoreContext = (input: ResolveInput): ScoreContext => ({
+  cwd: input.cwd,
+  frecencyByPath: frecencyMap(input.db, input.nowSeconds),
+  nowSeconds: input.nowSeconds,
+  rootWeights: weightsOf(input.roots),
+});
+
 const resolveReading = (query: ParsedQuery, input: ResolveInput): Decision => {
-  const context: ScoreContext = {
-    cwd: input.cwd,
-    frecencyByPath: frecencyMap(input.db, input.nowSeconds),
-  };
+  const context = scoreContext(input);
   if (query.order !== 'none') {
     // "latest X" is a filesystem question: rank without frecency or cwd bonuses so the
     // answer never changes with visit history or the directory the user happens to be in.
-    const detached: ScoreContext = { cwd: '', frecencyByPath: new Map() };
+    const detached: ScoreContext = { ...context, cwd: '', frecencyByPath: new Map() };
     const ordered = dropDescendants(rankCandidates(query, buildCandidates(input), detached));
     if (ordered.length > 0) return applyOrder(query, ordered, input.index);
   }
@@ -168,17 +179,15 @@ const resolveReading = (query: ParsedQuery, input: ResolveInput): Decision => {
 
 /**
  * A literal directory name always outranks a derived one. A folder can literally be called
- * "nordwind.at", so the typed word decides first and the derived readings only speak when
- * nothing answered at all, the most specific name first.
+ * "nordwind.at" or "mobile-first-workshops", so the typed words decide first and the derived
+ * readings (an operator, a spelled path, a link) only speak when nothing answered at all.
  */
 export const resolveQuery = (query: ParsedQuery, input: ResolveInput): Decision => {
-  const literal = resolveReading(query, input);
-  if (literal.kind !== 'unsure') return literal;
-  let unsure = literal;
-  for (const reading of readings(query).slice(1)) {
+  let unsure: Decision = { kind: 'unsure', candidates: [] };
+  for (const reading of readings(query)) {
     const decision = resolveReading(reading, input);
     if (decision.kind !== 'unsure') return decision;
-    if (unsure.candidates.length === 0) unsure = decision;
+    if (unsure.kind === 'unsure' && unsure.candidates.length === 0) unsure = decision;
   }
   return unsure;
 };

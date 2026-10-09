@@ -5,6 +5,7 @@ export const CLI_CONTROLS = [
   'index',
   'import',
   'doctor',
+  'config',
   'alias',
   'query',
   'complete',
