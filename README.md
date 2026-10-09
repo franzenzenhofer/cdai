@@ -285,7 +285,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.3.10 release suite covers 247 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.5.0 release suite covers 287 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
