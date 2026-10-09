@@ -321,7 +321,8 @@ source tree.
 ```
 
 **Tier 1 is the product.** Every directory name gets a match class - exact 1000, prefix 800,
-word boundary 600, substring 400, fuzzy up to 380 - plus `100 * log2(1 + frecency)`, a small
+word boundary 600, substring 400, fuzzy up to 380 (only for tokens of three letters or more:
+two letters are a subsequence of most names) - plus `100 * log2(1 + frecency)`, a small
 bonus for living under your current directory, a small recency bonus (30 points for a folder
 modified today, halving every 30 days) and the weight of its root. All tokens must match (AND).
 Ranking is by match class first, so these bonuses only order equal matches: of several equally

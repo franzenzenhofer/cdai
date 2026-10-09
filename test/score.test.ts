@@ -63,6 +63,13 @@ describe('scoreCandidate', () => {
     expect(scoreCandidate(query, candidate('/roots/dev/squash'), context())).toBe(SCORE.none);
   });
 
+  it('never counts a two letter token scattered through a name', () => {
+    const query = tokenize('ui kit');
+    expect(scoreCandidate(query, candidate('/roots/dev/tumult-kit'), context())).toBe(SCORE.none);
+    expect(scoreCandidate(query, candidate('/roots/dev/ui-kit'), context())).toBeGreaterThan(SCORE.none);
+    expect(scoreCandidate(tokenize('tmk'), candidate('/roots/dev/tumult-kit'), context())).toBeGreaterThan(SCORE.none);
+  });
+
   it('lets a token match the parent path at a lower class', () => {
     const query = tokenize('petalworks 2026x');
     const scored = scoreCandidate(

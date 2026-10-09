@@ -835,6 +835,7 @@ var FUZZY = {
   /** Share awarded for how much of the candidate name the query covers. */
   coverageShare: 0.2
 };
+var MIN_FUZZY_TOKEN_LENGTH = 3;
 var BONUS = {
   /** Weight of log2(1 + frecency). */
   frecency: 100,
@@ -2017,7 +2018,8 @@ var parentPath = (path) => {
 };
 var tokenScore = (token, candidate) => {
   const nameScore = matchName2(token, candidate.name);
-  if (nameScore > SCORE.none) return nameScore;
+  const literal = nameScore >= SCORE.substring || token.length >= MIN_FUZZY_TOKEN_LENGTH;
+  if (nameScore > SCORE.none && literal) return nameScore;
   return parentPath(candidate.path).toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
 };
 var brevityBonus = (query, candidate) => {

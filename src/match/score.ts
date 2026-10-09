@@ -6,7 +6,7 @@ import {
   type MatchOptions,
 } from '@franzenzenhofer/intent-core/match/score';
 import { rank, type Scored } from '@franzenzenhofer/intent-core/match/decide';
-import { BONUS, COMPLETION, FUZZY, RECENCY, SCORE } from './constants.js';
+import { BONUS, COMPLETION, FUZZY, MIN_FUZZY_TOKEN_LENGTH, RECENCY, SCORE } from './constants.js';
 import type { ParsedQuery } from './tokenize.js';
 
 /**
@@ -63,7 +63,8 @@ const parentPath = (path: string): string => {
 
 const tokenScore = (token: string, candidate: Candidate): number => {
   const nameScore = matchName(token, candidate.name);
-  if (nameScore > SCORE.none) return nameScore;
+  const literal = nameScore >= SCORE.substring || token.length >= MIN_FUZZY_TOKEN_LENGTH;
+  if (nameScore > SCORE.none && literal) return nameScore;
   return parentPath(candidate.path).toLowerCase().includes(token) ? SCORE.pathOnly : SCORE.none;
 };
 

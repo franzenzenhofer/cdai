@@ -21,6 +21,12 @@ export const FUZZY = {
   coverageShare: 0.2,
 } as const;
 
+/**
+ * Shortest token a scattered (fuzzy) match counts for. Two letters are a subsequence of most
+ * names - "ai" is in "re-max-first-day" - so below this a token must match literally or not at all.
+ */
+export const MIN_FUZZY_TOKEN_LENGTH = 3;
+
 /** Bonuses added on top of the raw name match. */
 export const BONUS = {
   /** Weight of log2(1 + frecency). */
