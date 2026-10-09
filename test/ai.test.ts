@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -28,6 +28,24 @@ const DESCENDANT_TIMEOUT_MS = 1000;
 const TIMEOUT_SLACK_MS = 5000;
 let fixture: Fixture;
 let shimDir = '';
+
+const SETTLE_BUDGET_MS = 5000;
+const SETTLE_POLL_MS = 50;
+
+/**
+ * A bounded wait for something a signal or a shell will get to shortly.
+ *
+ * Both halves of the descendant test were sampled at an instant: whether the shim had written
+ * its pid down yet, and whether the kill had landed. Under load neither is true at the instant
+ * the timeout returns, and the test failed for being early rather than for being wrong.
+ */
+const settles = async (check: () => boolean): Promise<boolean> => {
+  for (let waited = 0; waited < SETTLE_BUDGET_MS; waited += SETTLE_POLL_MS) {
+    if (check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+  }
+  return false;
+};
 
 const processTerminated = (pid: number): boolean => {
   try {
@@ -263,9 +281,9 @@ describe('askAi against a real shim process', () => {
     const outcome = await askAi(requestFor([fixture.clients]), backendFor(command), DESCENDANT_TIMEOUT_MS);
     expect(outcome.kind).toBe('none');
     expect(Date.now() - started).toBeLessThan(3000);
+    expect(await settles(() => existsSync(pidFile))).toBe(true);
     const pid = Number(readFileSync(pidFile, 'utf8').trim());
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(processTerminated(pid)).toBe(true);
+    expect(await settles(() => processTerminated(pid))).toBe(true);
   });
 
   it('degrades when the backend exits non zero and quotes its own complaint', async () => {
