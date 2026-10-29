@@ -6,7 +6,7 @@ import { makeFixture, writeConfig, type Fixture } from './fixtures.js';
 
 const REPO = process.cwd();
 const BIN = join(REPO, 'dist', 'cdai.js');
-const BASH = '/bin/bash';
+const BASH = process.env['CDAI_TEST_BASH'] ?? '/bin/bash';
 
 let fixture: Fixture;
 
@@ -26,6 +26,17 @@ const runRawBash = (script: string) => {
 };
 
 const runBash = (body: string) => runRawBash(`eval "$(node ${BIN} init bash)"\n${body}`);
+
+/**
+ * What the builtin itself exits with for these words, never 0. It is the truthful status the
+ * wrapper must pass on, and it differs by version: bash 5.3 says 2 for "too many arguments",
+ * older bash says 1.
+ */
+const nativeStatus = (args: string): string => {
+  const status = runRawBash(`builtin cd ${args} 2>/dev/null; printf "%s" "$?"`).stdout;
+  expect(status).not.toBe('0');
+  return status;
+};
 
 beforeAll(() => {
   expect(spawnSync('node', [join(REPO, 'scripts', 'build.mjs')]).status).toBe(0);
@@ -88,10 +99,10 @@ describe('cdai in a real Bash', () => {
     expect(option.stdout.trim()).not.toBe('exit=0');
     expect(option.stderr).not.toContain('thinking');
     const late = runBash('cdai petal -P; printf "exit=%s\\n" "$?"; pwd');
-    expect(late.stdout).toContain('exit=1');
+    expect(late.stdout).toContain(`exit=${nativeStatus('petal -P')}`);
     expect(late.stdout.trim().endsWith(fixture.rootDir)).toBe(true);
     const secondPath = runBash('cdai old new/path; printf "exit=%s\\n" "$?"');
-    expect(secondPath.stdout).toContain('exit=1');
+    expect(secondPath.stdout).toContain(`exit=${nativeStatus('old new/path')}`);
     expect(secondPath.stderr).not.toContain('no match');
   });
 
