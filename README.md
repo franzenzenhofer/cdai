@@ -172,6 +172,12 @@ cdai alias add [<path>] -- <words>
                           name no matcher could guess
 cdai alias forget -- <words>
                           forget a mistaken confirmed alias
+cdai log [-n <count>] [--json]
+                          every decision cdai made and every question it asked
+cdai log path             print only the decision log path
+cdai learn [--with claude|codex] [--model <name>] [--print-prompt]
+                          let a local claude or codex study the log and suggest
+                          aliases, settings and improvements to cdai itself
 cdai doctor               show what cdai sees on this machine
 cdai --version
 ```
@@ -206,6 +212,43 @@ outvoted by a fuzzy match or by frecency. The comparison ignores filler words bu
 words and years: an alias for `mobile first` answers `go to the mobile first folder`, never
 `latest mobile` or plain `mobile`. Aliases can also live in `config.json` (see
 [Configuration](#configuration)); those win over taught ones and survive a wiped state directory.
+
+### Every decision is logged, and cdai can learn from it
+
+Each navigation query leaves one JSON line in `~/.local/share/cdai/decisions.jsonl`: the words,
+the directory you were in, how the answer was reached (pasted path, config alias, taught alias,
+clear hit, picker, AI, nothing), the top candidates and their scores, whether the index was
+rescanned, every question cdai asked you (picker options, AI confirmation) with your answer, the
+AI backend's choice or failure, and how long it all took. Tab completion is not logged; it is a
+keystroke, not a decision. The file stays on this machine at mode `0600`, keeps the newer half
+once it passes 2 MiB, and `"log": false` in `config.json` stops it.
+
+```console
+$ cdai log -n 3
+2026-10-29 14:24  jump   hit          "petal" -> ~/dev/petalworks  (5ms)
+2026-10-29 14:24  miss   none         "the flower client"  (6ms)
+                  rescanned the index
+2026-10-29 14:24  jump   hit          "goalmap" -> ~/dev/goalmap  (4ms)
+```
+
+`cdai learn` hands that log to the Claude Code or Codex CLI already installed on your machine
+(`claude` first, then `codex`; pick one with `--with`) and asks what it teaches. It sends a
+digest, not the raw file: counts, the newest 150 decisions that were not a clean hit, the
+directories you jump to most and the words you use for them, your roots and your aliases. A
+query asked again within two minutes, after a miss or with a word in common, is marked as a
+retry, because that is what a wrong answer looks like from the outside.
+`cdai learn --print-prompt` prints exactly what would be sent and sends nothing.
+
+The answer is held to the same rules as the AI tier. It must match a JSON schema; a suggested
+alias may only point to a directory the log itself named, inside your roots, for words no alias
+answers yet; and each one is offered as a `[Y/n]` question before anything is written. Suggested
+settings are `cdai ...` commands shown to you, never run. Ideas for improving cdai itself (the
+tokenizer, scoring, thresholds) come with the logged decision that would have gone right. Every
+report is kept under `~/.local/share/cdai/learn/`.
+
+This sends your directory names and queries to the provider behind that CLI, which is the point
+of running it. Claude is asked with `--safe-mode`, no tools and no session persistence; Codex
+with a read-only sandbox, `--ephemeral`, in an empty temporary directory.
 
 ## Why this exists
 
@@ -285,7 +328,7 @@ cached Tab completion.
 
 Reproduce with `npm run build && npx vitest run test/latency.test.ts`.
 
-The v0.5.0 release suite covers 287 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
+The v0.6.0 release suite covers 307 tests. CI runs on macOS and Linux with Node 20, 22 and 24;
 real PTYs exercise Zsh, Bash, Fish 3.6 and Fish 4.8; a synthetic 50,000-entry index has its own
 completion budget; and the packed tarball is installed and executed instead of testing only the
 source tree.
@@ -457,7 +500,8 @@ change it; `cdai config path` prints just the path, for `$EDITOR "$(cdai config 
   "aliases": {
     "the shop": "~/Dropbox/clients/acme-shop",
     "nudge game": "~/dev/games/notchi"
-  }
+  },
+  "log": true
 }
 ```
 
@@ -469,6 +513,7 @@ change it; `cdai config path` prints just the path, for `$EDITOR "$(cdai config 
 | `ignore` | directory names never indexed |
 | `ai` | the optional AI tier, see [AI backends](#ai-backends) |
 | `aliases` | `"words": "path"`, answered before anything else and before taught aliases. A missing target is an error, not a silent skip |
+| `log` | `true` (default) appends every navigation decision to `decisions.jsonl` for `cdai log` and `cdai learn`; `false` stops it |
 
 The file is validated strictly. An unknown key, a relative path, a depth of 0, a duplicate root
 or alias, or a wrongly typed value stops cdai with the file and the key named
@@ -477,7 +522,9 @@ instead of quietly falling back to a default. Only an absent key takes its defau
 
 Data lives in `~/.local/share/cdai/`: `index.json` (capped at 50,000 entries and a five-second
 walk), `db.json` (frecency, capped at 10,000 paths), `aliases.json` (confirmed intent, capped at
-256), and `visits.log` (append only, ingested transactionally on the next navigation query).
+256), `visits.log` (append only, ingested transactionally on the next navigation query),
+`decisions.jsonl` (one line per decision, trimmed to its newer half past 2 MiB) and `learn/` (one
+Markdown report per `cdai learn` run).
 Config/state directories are mode `0700` and files `0600`; each invocation tightens permissions
 from older installs. The index carries a roots/depth/ignore fingerprint, reports partial crawls,
 and is rebuilt automatically when that configuration changes. Concurrent shells serialize

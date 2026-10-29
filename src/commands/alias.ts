@@ -33,7 +33,7 @@ const readAddArgs = (args: readonly string[]): AliasInput | string => {
 };
 
 /** An alias outside the configured roots is dropped the moment it is used, so refuse it here. */
-const rejection = (path: string): string | null => {
+export const aliasRejection = (path: string): string | null => {
   if (!isDirectory(path)) return `no such directory: ${contractTilde(path)}`;
   if (!isProtocolSafePath(path)) return 'directory contains a line break unsupported by shell transport';
   if (loadConfig().roots.some((root) => isUnderRoot(path, root.path))) return null;
@@ -50,7 +50,7 @@ const add = (args: readonly string[]): ExitCode => {
     fail(input, ALIAS_USAGE);
     return EXIT.error;
   }
-  const rejected = rejection(input.path);
+  const rejected = aliasRejection(input.path);
   if (rejected !== null) {
     fail(rejected);
     return EXIT.error;

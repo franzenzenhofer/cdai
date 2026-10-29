@@ -9,3 +9,7 @@ export const indexFile = (): string => stateFile('index.json');
 export const aliasesFile = (): string => stateFile('aliases.json');
 /** Appended to by the shell hook, drained by cdai. See store/visit-claims.ts. */
 export const visitsLog = (): string => stateFile('visits.log');
+/** One JSON line per navigation decision, read back by `cdai log` and `cdai learn`. */
+export const decisionsLog = (): string => stateFile('decisions.jsonl');
+/** Where `cdai learn` keeps every report it wrote, one file per run. */
+export const learnDir = (): string => stateFile('learn');

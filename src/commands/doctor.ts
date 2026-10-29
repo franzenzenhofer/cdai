@@ -3,7 +3,8 @@ import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/
 import { configExists, loadConfig, type AiConfig, type Config } from '../config.js';
 import { resolveExecutable } from '@franzenzenhofer/intent-core/executable';
 import { configDir, configFile, contractTilde, dataDir, hasPrivateMode } from '@franzenzenhofer/intent-core/paths';
-import { aliasesFile, dbFile, indexFile, visitsLog } from '../state.js';
+import { aliasesFile, dbFile, decisionsLog, indexFile, visitsLog } from '../state.js';
+import { loadDecisions } from '../store/decisions.js';
 import { hasTty } from '@franzenzenhofer/intent-core/picker';
 import { EXIT, note, type ExitCode } from '../protocol.js';
 import { loadDb } from '../store/db.js';
@@ -44,7 +45,7 @@ const doctorArgs = (args: readonly string[]): ExitCode | null => {
 const stateIsPrivate = (): boolean =>
   hasPrivateMode(configDir(), true) &&
   hasPrivateMode(dataDir(), true) &&
-  [configFile(), indexFile(), dbFile(), aliasesFile(), visitsLog()]
+  [configFile(), indexFile(), dbFile(), aliasesFile(), visitsLog(), decisionsLog()]
     .filter(existsSync)
     .every((path) => hasPrivateMode(path, false));
 
@@ -72,6 +73,7 @@ export const runDoctor = (args: readonly string[] = []): ExitCode => {
   note(`db     ${mark(existsSync(dbFile()))} ${loadDb().records.length} remembered paths`);
   note(`alias  ${mark(existsSync(aliasesFile()))} ${loadAliases().aliases.length} confirmed intents, ${config.aliases.length} in config`);
   note(`visits ${mark(existsSync(visitsLog()))} ${visitsLog()}`);
+  note(`log    ${mark(config.log)} ${config.log ? `${loadDecisions().length} decisions` : 'off ("log": false)'}, see \`cdai log\``);
   note(`fzf    ${mark(resolveExecutable('fzf') !== null)}`);
   note(`tty    ${mark(hasTty())}`);
   note(`privacy ${mark(stateIsPrivate())} private state permissions`);

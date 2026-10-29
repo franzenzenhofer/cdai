@@ -2,7 +2,7 @@ import { absolutize, isProtocolSafePath } from '@franzenzenhofer/intent-core/pat
 import type { AiConfig } from '@franzenzenhofer/intent-core/ai/backend';
 import { normalizeIntent } from '@franzenzenhofer/intent-core/store/aliases';
 import {
-  DEFAULT_AI, DEFAULT_DEPTH, DEFAULT_IGNORE, MAX_DEPTH, MAX_TIMER_MS, WEIGHT_LIMIT,
+  DEFAULT_AI, DEFAULT_DEPTH, DEFAULT_IGNORE, DEFAULT_LOG, MAX_DEPTH, MAX_TIMER_MS, WEIGHT_LIMIT,
   type CdaiRoot, type ConfigAlias,
 } from './config-types.js';
 
@@ -74,11 +74,13 @@ const readArgs = (value: unknown): string[] => {
   throw invalid('ai.args', 'must be an array of strings');
 };
 
-const readEnabled = (value: unknown): boolean => {
-  if (value === undefined) return DEFAULT_AI.enabled;
+const readBoolean = (value: unknown, where: string, fallback: boolean): boolean => {
+  if (value === undefined) return fallback;
   if (typeof value === 'boolean') return value;
-  throw invalid('ai.enabled', 'must be true or false');
+  throw invalid(where, 'must be true or false');
 };
+
+export const readLog = (value: unknown): boolean => readBoolean(value, 'log', DEFAULT_LOG);
 
 export const readAi = (value: unknown): AiConfig => {
   if (value === undefined) return { ...DEFAULT_AI };
@@ -86,7 +88,7 @@ export const readAi = (value: unknown): AiConfig => {
   expectKeys(value, ['enabled', 'command', 'args', 'model', 'timeoutMs'], 'ai');
   const timeout = value['timeoutMs'];
   return {
-    enabled: readEnabled(value['enabled']),
+    enabled: readBoolean(value['enabled'], 'ai.enabled', DEFAULT_AI.enabled),
     command: readString(value['command'], 'ai.command', DEFAULT_AI.command, false),
     args: readArgs(value['args']),
     model: readString(value['model'], 'ai.model', DEFAULT_AI.model, true),

@@ -1,18 +1,18 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { configFile, writeAtomic } from '@franzenzenhofer/intent-core/paths';
 import { withStateLock } from '@franzenzenhofer/intent-core/store/lock';
-import { expectKeys, isRecord, readAi, readAliases, readIgnore, readRoots } from './config-read.js';
-import { DEFAULT_AI, DEFAULT_IGNORE, type Config } from './config-types.js';
+import { expectKeys, isRecord, readAi, readAliases, readIgnore, readLog, readRoots } from './config-read.js';
+import { DEFAULT_AI, DEFAULT_IGNORE, DEFAULT_LOG, type Config } from './config-types.js';
 
 export {
-  DEFAULT_AI, DEFAULT_DEPTH, DEFAULT_IGNORE, MAX_DEPTH, WEIGHT_LIMIT,
+  DEFAULT_AI, DEFAULT_DEPTH, DEFAULT_IGNORE, DEFAULT_LOG, MAX_DEPTH, WEIGHT_LIMIT,
   type AiConfig, type CdaiRoot, type Config, type ConfigAlias, type RootConfig,
 } from './config-types.js';
 
-const TOP_LEVEL_KEYS = ['roots', 'ignore', 'ai', 'aliases'] as const;
+const TOP_LEVEL_KEYS = ['roots', 'ignore', 'ai', 'aliases', 'log'] as const;
 
 export const emptyConfig = (): Config =>
-  ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI }, aliases: [] });
+  ({ roots: [], ignore: [...DEFAULT_IGNORE], ai: { ...DEFAULT_AI }, aliases: [], log: DEFAULT_LOG });
 
 export const configExists = (): boolean => existsSync(configFile());
 
@@ -25,6 +25,7 @@ const parseConfig = (raw: string): Config => {
     ignore: readIgnore(parsed['ignore']),
     ai: readAi(parsed['ai']),
     aliases: readAliases(parsed['aliases']),
+    log: readLog(parsed['log']),
   };
 };
 
@@ -50,6 +51,7 @@ export const serializeConfig = (config: Config): string =>
     ignore: config.ignore,
     ai: config.ai,
     aliases: Object.fromEntries(config.aliases.map((alias) => [alias.query, alias.path])),
+    log: config.log,
   }, null, 2)}\n`;
 
 export const saveConfig = (config: Config): void => {

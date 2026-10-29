@@ -1,140 +1,48 @@
-import { backendLabel, resolveAiBackend } from '@franzenzenhofer/intent-core/ai/backend';
-import { askAi, type AiOutcome } from '../ai/client.js';
-import { buildAiRequest } from '../ai/prompt.js';
 import { loadConfig, type Config } from '../config.js';
-import { LIMIT } from '../match/constants.js';
-import { looseCandidates, resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
-import type { ScoredCandidate } from '../match/score.js';
+import { resolveQuery, type Decision, type ResolveInput } from '../match/resolve.js';
 import { tokenizeArgs, type ParsedQuery } from '../match/tokenize.js';
-import { configFile, contractTilde, isDirectory, isProtocolSafePath, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
+import { configFile, contractTilde, isDirectory, isUnderRoot } from '@franzenzenhofer/intent-core/paths';
 import { recallIntent } from './alias-recall.js';
 import { nativeCdWords, spelledPlace } from '../match/literal.js';
-import { confirm, hasTty, pick, toItems } from '@franzenzenhofer/intent-core/picker';
-import { EXIT, fail, jump, note, type ExitCode } from '../protocol.js';
-import { ingest, type Db } from '../store/db.js';
-import { forgetAlias, rememberAlias } from '../store/aliases.js';
+import { pick, toItems } from '@franzenzenhofer/intent-core/picker';
+import { EXIT, fail, type ExitCode } from '../protocol.js';
+import { ingest } from '../store/db.js';
+import { forgetAlias } from '../store/aliases.js';
 import { loadIndex, matchesConfig, refreshIndex, type DirIndex } from '@franzenzenhofer/intent-core/store/indexer';
+import { jumpExisting, jumpKnown } from './jump.js';
+import { aiTier, type QueryContext } from './query-ai.js';
+import { startTrace, type Trace } from './trace.js';
+import packageJson from '../../package.json' with { type: 'json' };
 
 const MILLIS_PER_SECOND = 1000;
-
-interface QueryContext {
-  readonly query: ParsedQuery;
-  readonly config: Config;
-  readonly db: Db;
-  readonly nowSeconds: number;
-  readonly input: ResolveInput;
-  /** The shell can word this failure better than we can, so a miss says nothing at all. */
-  readonly native: boolean;
-}
-
-/**
- * The last word, and the only place a rescan is not the answer: this is reached with a freshly
- * built index behind it, so the scope of that scan is the useful thing to report - a place it
- * never looked cannot be found by looking again.
- */
-const suggest = (ranked: readonly ScoredCandidate[], context: QueryContext): ExitCode => {
-  if (context.native) return EXIT.native;
-  fail(`no match for "${context.query.raw}"`);
-  const guesses = ranked.slice(0, LIMIT.suggestions);
-  if (guesses.length > 0) {
-    note('      closest:');
-    guesses.forEach((g) => note(`        ${contractTilde(g.candidate.path)}`));
-  }
-  const roots = context.config.roots.length;
-  const scanned = context.input.index.entries.length;
-  note(`      searched ${scanned} directories under ${roots} ${roots === 1 ? 'root' : 'roots'}, freshly scanned`);
-  note('      not there? `cdai setup --root <path>`, or reach deeper with `--depth <n>`');
-  return EXIT.error;
-};
-
-const jumpKnown = (path: string): ExitCode => {
-  if (!isProtocolSafePath(path)) {
-    fail('matched path contains a line break unsupported by shell transport');
-    return EXIT.error;
-  }
-  jump(path);
-  return EXIT.ok;
-};
-
-/**
- * Reached only with a freshly scanned index behind it, so the match was a directory moments ago
- * and is not one now. Rebuilding the cache is exactly what already happened, so the honest report
- * is that it went away under us - a rename, a delete, or a symlink that stopped pointing anywhere.
- */
-const jumpExisting = (path: string): ExitCode => {
-  if (!isDirectory(path)) {
-    fail(`${contractTilde(path)} stopped being a directory during this lookup`);
-    return EXIT.error;
-  }
-  return jumpKnown(path);
-};
 
 /**
  * A named directory is the answer before any matcher guesses. A broken config alias is the
  * user's own file being wrong, so it is reported rather than skipped; a taught one whose target
  * vanished or left the roots is forgotten and the search goes on.
  */
-const recalledAlias = (query: ParsedQuery, config: Config): ExitCode | null => {
+const recalledAlias = (query: ParsedQuery, config: Config, trace: Trace): ExitCode | null => {
   const alias = recallIntent(query.raw, config);
   if (alias === undefined) return null;
   if (alias.source === 'config') {
+    trace.via('config-alias', alias.path);
     if (isDirectory(alias.path)) return jumpKnown(alias.path);
     fail(`config alias "${alias.query}" points to a missing directory: ${contractTilde(alias.path)}`,
       `fix or remove it in ${configFile()}`);
     return EXIT.error;
   }
   const trusted = config.roots.some((root) => isUnderRoot(alias.path, root.path));
-  if (trusted && isDirectory(alias.path)) return jumpKnown(alias.path);
+  if (trusted && isDirectory(alias.path)) {
+    trace.via('taught-alias', alias.path);
+    return jumpKnown(alias.path);
+  }
   forgetAlias(alias.query);
   return null;
 };
 
-const acceptAi = (
-  outcome: Extract<AiOutcome, { readonly kind: 'path' }>,
-  context: QueryContext,
-): ExitCode => {
-  const label = outcome.reason === '' ? '' : ` (${outcome.reason})`;
-  if (!confirm(`cdai: ${contractTilde(outcome.path)}${label}`)) return EXIT.noCd;
-  rememberAlias(context.query.raw, outcome.path, context.nowSeconds);
-  return jumpKnown(outcome.path);
-};
-
-const declineHeadlessAi = (): ExitCode => {
-  note('cdai: AI confirmation requires a terminal [no terminal, declined]');
-  return EXIT.noCd;
-};
-
-const aiTier = async (strict: readonly ScoredCandidate[], context: QueryContext): Promise<ExitCode> => {
-  const { ai } = context.config;
-  const ranked = strict.length > 0 ? strict : looseCandidates(context.query, context.input);
-  if (!ai.enabled) return suggest(ranked, context);
-  if (!hasTty()) return context.native ? EXIT.native : declineHeadlessAi();
-  const request = buildAiRequest({
-    query: context.query.raw,
-    cwd: process.cwd(),
-    ranked,
-    db: context.db,
-    nowSeconds: context.nowSeconds,
-    roots: context.config.roots.map((root) => root.path),
-  });
-  if (request.candidates.length === 0) return suggest(ranked, context);
-  const backend = resolveAiBackend(ai);
-  if (backend === null) {
-    const label = ai.command === 'auto' ? 'no supported AI backend found' : `${ai.command} unavailable`;
-    note(`cdai: ${label}, staying deterministic`);
-    return suggest(ranked, context);
-  }
-  note(`cdai: thinking... (${backendLabel(backend)})`);
-  const outcome = await askAi(request, backend, ai.timeoutMs);
-  if (outcome.kind === 'none') {
-    note(`cdai: ai had no usable answer (${outcome.why})`);
-    return suggest(ranked, context);
-  }
-  return acceptAi(outcome, context);
-};
-
 const retryFresh = async (context: QueryContext): Promise<ExitCode> => {
   const input = { ...context.input, index: refreshIndex(context.config) };
+  context.trace.rescanned();
   const decision = resolveQuery(context.query, input);
   return finish(decision, { ...context, input }, true);
 };
@@ -145,12 +53,17 @@ const finish = async (
   refreshed: boolean,
 ): Promise<ExitCode> => {
   if (decision.kind === 'hit') {
+    context.trace.hit(decision.path, decision.score);
     if (isDirectory(decision.path)) return jumpKnown(decision.path);
     return refreshed ? jumpExisting(decision.path) : retryFresh(context);
   }
+  context.trace.ranked(decision.candidates);
   if (decision.kind === 'choose') {
-    const chosen = pick(toItems(decision.candidates.map((c) => c.candidate.path)));
+    const options = decision.candidates.map((c) => c.candidate.path);
+    const chosen = pick(toItems(options));
+    context.trace.asked({ kind: 'picker', options, answer: chosen });
     if (chosen === null) return EXIT.noCd;
+    context.trace.via('picker', chosen);
     if (isDirectory(chosen)) return jumpKnown(chosen);
     return refreshed ? jumpExisting(chosen) : retryFresh(context);
   }
@@ -185,14 +98,17 @@ const searchInput = (args: readonly string[], native: boolean): SearchInput | nu
   return null;
 };
 
-export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
+const resolveIntent = async (args: readonly string[], trace: Trace): Promise<ExitCode> => {
   const named = spelledPlace(args);
-  if (named !== null) return jumpKnown(named);
+  if (named !== null) {
+    trace.via('path', named);
+    return jumpKnown(named);
+  }
   const native = nativeCdWords(args);
   const search = searchInput(args, native);
   if (search === null) return native ? EXIT.native : EXIT.error;
   const { query, config } = search;
-  const recalled = recalledAlias(query, config);
+  const recalled = recalledAlias(query, config, trace);
   if (recalled !== null) return recalled;
   const db = ingest();
   const nowSeconds = Math.floor(Date.now() / MILLIS_PER_SECOND);
@@ -206,7 +122,30 @@ export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
   if (!refreshed && decision.kind === 'unsure') {
     input = { ...input, index: refreshIndex(config) };
     refreshed = true;
+    trace.rescanned();
     decision = resolveQuery(query, input);
   }
-  return finish(decision, { query, config, db, nowSeconds, input, native }, refreshed);
+  return finish(decision, { query, config, db, nowSeconds, input, native, trace }, refreshed);
+};
+
+/** A broken config.json is already reported by the query itself, so it never also blocks the log. */
+const logEnabled = (): boolean => {
+  try {
+    return loadConfig().log;
+  } catch {
+    return false;
+  }
+};
+
+/** Every query leaves one line in the decision log, whatever it ends in. See commands/trace.ts. */
+export const runQuery = async (args: readonly string[]): Promise<ExitCode> => {
+  const { trace, finish: record } = startTrace(args, packageJson.version, logEnabled);
+  try {
+    const code = await resolveIntent(args, trace);
+    record(code, null);
+    return code;
+  } catch (error) {
+    record(EXIT.error, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 };

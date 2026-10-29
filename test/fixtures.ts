@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setProduct } from '@franzenzenhofer/intent-core/product';
+import type { DecisionEntry } from '../src/store/decisions.js';
 
 const UNREADABLE_MODE = 0o000;
 const READABLE_MODE = 0o755;
@@ -146,3 +147,10 @@ export const addWorkshopTree = (fixture: Fixture): void => {
     utimesSync(join(fixture.clients, relative), stamp, stamp);
   }
 };
+
+/** One logged decision, a clean hit unless told otherwise. */
+export const decisionEntry = (overrides: Partial<DecisionEntry> = {}): DecisionEntry => ({
+  v: 1, at: 1_800_000_000_000, version: '0.0.0', words: ['petal'], cwd: '/', via: 'hit',
+  outcome: 'jump', path: '/p/petalworks', rescanned: false, candidates: [], questions: [],
+  ai: null, error: null, ms: 3, ...overrides,
+});

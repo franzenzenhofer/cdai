@@ -19,6 +19,8 @@ export const DEFAULT_IGNORE = [
   '.next',
   '.cache',
 ];
+/** On by default: the log stays on this machine, and `cdai learn` has nothing without it. */
+export const DEFAULT_LOG = true;
 export const DEFAULT_AI = {
   enabled: true,
   command: 'auto',
@@ -47,4 +49,6 @@ export interface Config {
   readonly ignore: readonly string[];
   readonly ai: AiConfig;
   readonly aliases: readonly ConfigAlias[];
+  /** Whether each navigation decision is appended to the local decision log. */
+  readonly log: boolean;
 }

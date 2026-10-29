@@ -154,6 +154,7 @@ const writeSetup = (existing: Config, options: SetupOptions, candidates: CdaiRoo
     ignore: existing.ignore.length > 0 ? existing.ignore : [...DEFAULT_IGNORE],
     ai: selectedAi(existing, options.ai, options.yes),
     aliases: existing.aliases,
+    log: existing.log,
   };
   return saveAndReport(config, removed);
 };

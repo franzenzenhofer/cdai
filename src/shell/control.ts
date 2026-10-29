@@ -7,6 +7,8 @@ export const CLI_CONTROLS = [
   'doctor',
   'config',
   'alias',
+  'log',
+  'learn',
   'query',
   'complete',
   '--help',

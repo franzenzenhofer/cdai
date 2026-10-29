@@ -22,6 +22,8 @@ const CONTROL_ARGS: Record<CliControl, readonly string[]> = {
   doctor: ['doctor'],
   config: ['config', 'path'],
   alias: ['alias', 'list'],
+  log: ['log', '-n', '5'],
+  learn: ['learn', '--print-prompt'],
   query: ['query', '--', 'petal'],
   complete: ['complete', '--', 'pet'],
   '--help': ['--help'],

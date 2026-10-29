@@ -5,6 +5,8 @@ import { runComplete } from './commands/complete.js';
 import { runConfig } from './commands/config-cmd.js';
 import { runImportZoxide } from './commands/import-zoxide.js';
 import { runIndex } from './commands/index-cmd.js';
+import { runLearn } from './commands/learn.js';
+import { runLog } from './commands/log-cmd.js';
 import { runQuery } from './commands/query.js';
 import { runSetup } from './commands/setup.js';
 import { EXIT, fail, note, type ExitCode } from './protocol.js';
@@ -37,6 +39,9 @@ const USAGE = [
   '  cdai import zoxide        seed frecency from an existing zoxide database',
   '  cdai alias <list|add|forget>',
   '                            inspect, teach or correct confirmed local intent',
+  '  cdai log [-n <count>]     every decision cdai made and every question it asked',
+  '  cdai learn [--with claude|codex]',
+  '                            let a local claude or codex study the log and suggest improvements',
   '  cdai doctor               show what cdai sees on this machine',
   '  cdai --version',
   '',
@@ -111,6 +116,8 @@ const dispatch = async (args: readonly string[]): Promise<ExitCode> => {
   if (command === 'alias') return runAlias(args.slice(1));
   if (command === 'doctor') return runDoctor(args.slice(1));
   if (command === 'config') return runConfig(args.slice(1));
+  if (command === 'log') return runLog(args.slice(1));
+  if (command === 'learn') return runLearn(args.slice(1));
   if (command === 'complete') return runComplete(queryArgs(args));
   if (command === 'query') return runQueryCommand(args.slice(1));
   return runQuery(args);
